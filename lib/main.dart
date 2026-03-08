@@ -73,6 +73,9 @@ class OrderTransaction {
   final double vat;
   final List<CartItem> items;
   final bool includesVat;
+  String paymentStatus; // 'Paid' or 'Awaiting Payment'
+  String? customerName;
+  String? businessName;
 
   OrderTransaction({
     required this.id,
@@ -82,6 +85,9 @@ class OrderTransaction {
     required this.vat,
     required this.items,
     this.includesVat = true,
+    this.paymentStatus = 'Paid',
+    this.customerName,
+    this.businessName,
   });
 
   Map<String, dynamic> toJson() => {
@@ -92,6 +98,9 @@ class OrderTransaction {
     'vat': vat,
     'items': items.map((i) => i.toJson()).toList(),
     'includesVat': includesVat,
+    'paymentStatus': paymentStatus,
+    'customerName': customerName,
+    'businessName': businessName,
   };
 
   factory OrderTransaction.fromJson(Map<String, dynamic> json) => OrderTransaction(
@@ -102,6 +111,9 @@ class OrderTransaction {
     vat: json['vat'] ?? (json['total'] - (json['total'] / 1.15)),
     items: (json['items'] as List).map((i) => CartItem.fromJson(i)).toList(),
     includesVat: json['includesVat'] ?? true,
+    paymentStatus: json['paymentStatus'] ?? 'Paid',
+    customerName: json['customerName'],
+    businessName: json['businessName'],
   );
 }
 
@@ -271,7 +283,6 @@ class _PosScreenState extends State<PosScreen> {
               if (newPrice != null && newPrice >= 0) {
                 setState(() {
                   product.price = newPrice;
-                  // Auto-update any items currently in the cart to the new price
                   for (var item in _cart) {
                     if (item.product.id == product.id) {
                       item.product.price = newPrice;
@@ -299,9 +310,83 @@ class _PosScreenState extends State<PosScreen> {
   double get _vatAmount => _applyVat ? _subTotal * 0.15 : 0.0;
   double get _grandTotal => _subTotal + _vatAmount;
 
-  void _checkout() {
+  Future<void> _showCheckoutDialog() async {
     if (_cart.isEmpty) return;
 
+    TextEditingController customerNameCtrl = TextEditingController();
+    TextEditingController businessNameCtrl = TextEditingController();
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Checkout Details'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: customerNameCtrl,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Customer Name (Optional)',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.person_outline),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: businessNameCtrl,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Business Name (Optional)',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.business),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Amount Due:', style: TextStyle(fontSize: 16)),
+                    Text('R ${_grandTotal.toStringAsFixed(2)}', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          OutlinedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _finalizeOrder('Awaiting Payment', customerNameCtrl.text, businessNameCtrl.text);
+            },
+            style: OutlinedButton.styleFrom(foregroundColor: Colors.orange.shade700, side: BorderSide(color: Colors.orange.shade300)),
+            child: const Text('Awaiting Payment'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _finalizeOrder('Paid', customerNameCtrl.text, businessNameCtrl.text);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
+            child: const Text('Mark as Paid'),
+          ),
+        ],
+      )
+    );
+  }
+
+  void _finalizeOrder(String status, String custName, String bizName) {
     final newTransaction = OrderTransaction(
       id: 'TXN-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
       date: DateTime.now(),
@@ -310,6 +395,9 @@ class _PosScreenState extends State<PosScreen> {
       total: _grandTotal,
       items: List.from(_cart),
       includesVat: _applyVat,
+      paymentStatus: status,
+      customerName: custName.trim().isNotEmpty ? custName.trim() : null,
+      businessName: bizName.trim().isNotEmpty ? bizName.trim() : null,
     );
 
     setState(() {
@@ -317,27 +405,35 @@ class _PosScreenState extends State<PosScreen> {
     });
     _saveHistoryToDatabase();
 
+    _showSuccessDialog(newTransaction);
+  }
+
+  void _showSuccessDialog(OrderTransaction tx) {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.check_circle, color: Colors.green, size: 32),
-            SizedBox(width: 10),
-            Text('Payment Successful'),
+            Icon(
+              tx.paymentStatus == 'Paid' ? Icons.check_circle : Icons.schedule, 
+              color: tx.paymentStatus == 'Paid' ? Colors.green : Colors.orange, 
+              size: 32
+            ),
+            const SizedBox(width: 10),
+            Text(tx.paymentStatus == 'Paid' ? 'Payment Successful' : 'Order Saved'),
           ],
         ),
         content: Text(
-          'Order #${newTransaction.id}\nTotal paid: R ${_grandTotal.toStringAsFixed(2)}',
+          'Order #${tx.id}\nStatus: ${tx.paymentStatus}\nTotal: R ${tx.total.toStringAsFixed(2)}',
           style: const TextStyle(fontSize: 16),
         ),
         actions: [
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              _printReceipt(newTransaction);
+              _printReceipt(tx);
               _clearCart();
             },
             child: const Text('Thermal Receipt'),
@@ -345,7 +441,7 @@ class _PosScreenState extends State<PosScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              _printInvoice(newTransaction);
+              _printInvoice(tx);
               _clearCart();
             },
             child: const Text('A4 Invoice'),
@@ -407,6 +503,8 @@ class _PosScreenState extends State<PosScreen> {
               pw.Divider(),
               pw.Text('Order: #${tx.id}'),
               pw.Text('Date: ${tx.date.day}/${tx.date.month}/${tx.date.year} ${tx.date.hour}:${tx.date.minute.toString().padLeft(2, '0')}'),
+              if (tx.customerName != null) pw.Text('Customer: ${tx.customerName}'),
+              if (tx.businessName != null) pw.Text('Business: ${tx.businessName}'),
               pw.Divider(),
               ...tx.items.map((item) => pw.Row(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -422,6 +520,11 @@ class _PosScreenState extends State<PosScreen> {
               pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
                 pw.Text('TOTAL', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
                 pw.Text('R ${tx.total.toStringAsFixed(2)}', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+              ]),
+              pw.SizedBox(height: 4),
+              pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+                pw.Text('STATUS', style: const pw.TextStyle(fontSize: 12)),
+                pw.Text(tx.paymentStatus.toUpperCase(), style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
               ]),
               pw.SizedBox(height: 10),
               pw.Center(child: pw.Text('*** CUSTOMER COPY ***', style: const pw.TextStyle(fontSize: 10))),
@@ -463,11 +566,30 @@ class _PosScreenState extends State<PosScreen> {
                         pw.SizedBox(height: 8),
                         pw.Text('Invoice #: ${tx.id}', style: const pw.TextStyle(fontSize: 12)),
                         pw.Text('Date: ${tx.date.day}/${tx.date.month}/${tx.date.year}', style: const pw.TextStyle(fontSize: 12)),
+                        pw.Text('Status: ${tx.paymentStatus}', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: tx.paymentStatus == 'Paid' ? PdfColors.green700 : PdfColors.orange700)),
                       ]
                     )
                   ]
                 ),
                 pw.SizedBox(height: 40),
+                
+                // Billed To Section
+                pw.Container(
+                  padding: const pw.EdgeInsets.all(12),
+                  decoration: pw.BoxDecoration(color: PdfColors.grey100, borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8))),
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text('BILLED TO:', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.grey600)),
+                      pw.SizedBox(height: 4),
+                      pw.Text(tx.customerName ?? 'Cash Customer', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                      if (tx.businessName != null) pw.Text(tx.businessName!, style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
+                      if (tx.businessName == null && tx.customerName == null) pw.Text('Walk-in Client', style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
+                    ]
+                  )
+                ),
+                pw.SizedBox(height: 20),
+
                 // Table Header
                 pw.Container(
                   padding: const pw.EdgeInsets.symmetric(vertical: 8, horizontal: 12),
@@ -681,7 +803,7 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  // Custom Bar Chart built with native Flutter widgets (No extra packages needed!)
+  // Custom Bar Chart built with native Flutter widgets
   Widget _buildRevenueBarChart(Map<String, double> revByDay) {
     double maxRev = revByDay.values.fold(0.0, (max, v) => v > max ? v : max);
     if (maxRev == 0) maxRev = 1; // Prevent division by zero
@@ -769,7 +891,7 @@ class _PosScreenState extends State<PosScreen> {
                 ],
               ),
             );
-          }).toList(), // remove extra trailing padding visually handled by layout
+          }).toList(),
         ],
       ),
     );
@@ -778,7 +900,7 @@ class _PosScreenState extends State<PosScreen> {
   Widget _buildKpiCard(String title, String value, IconData icon, MaterialColor color) {
     return Card(
       elevation: 0,
-      margin: EdgeInsets.zero, // Important for clean mobile layout wrapping
+      margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: Colors.grey.shade200)),
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -848,7 +970,7 @@ class _PosScreenState extends State<PosScreen> {
             padding: const EdgeInsets.all(24),
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: isDesktop ? 4 : 2,
-              childAspectRatio: isDesktop ? 0.9 : 0.85, // Better aspect ratio for narrow mobile screens
+              childAspectRatio: isDesktop ? 0.9 : 0.85,
               crossAxisSpacing: 16,
               mainAxisSpacing: 16,
             ),
@@ -962,7 +1084,7 @@ class _PosScreenState extends State<PosScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                     gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                       maxCrossAxisExtent: 400,
-                      childAspectRatio: 1.5,
+                      childAspectRatio: 1.35,
                       crossAxisSpacing: 16,
                       mainAxisSpacing: 16,
                     ),
@@ -970,6 +1092,7 @@ class _PosScreenState extends State<PosScreen> {
                     itemBuilder: (context, index) {
                       final tx = _history[index];
                       int itemCount = tx.items.fold(0, (sum, item) => sum + item.quantity);
+                      
                       return Card(
                         elevation: 0,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: Colors.grey.shade200)),
@@ -982,22 +1105,38 @@ class _PosScreenState extends State<PosScreen> {
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(6)),
-                                    child: Text(tx.id, style: const TextStyle(color: Color(0xFF4F46E5), fontWeight: FontWeight.bold, fontSize: 12)),
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(6)),
+                                        child: Text(tx.id, style: const TextStyle(color: Color(0xFF4F46E5), fontWeight: FontWeight.bold, fontSize: 12)),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: tx.paymentStatus == 'Paid' ? Colors.green.shade50 : Colors.orange.shade50, 
+                                          borderRadius: BorderRadius.circular(6)
+                                        ),
+                                        child: Text(
+                                          tx.paymentStatus.toUpperCase(), 
+                                          style: TextStyle(color: tx.paymentStatus == 'Paid' ? Colors.green.shade700 : Colors.orange.shade700, fontWeight: FontWeight.bold, fontSize: 10)
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                   Row(
                                     children: [
                                       Text('R ${tx.total.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                                      const SizedBox(width: 8),
-                                      InkWell(
-                                        onTap: () => _deleteTransaction(tx),
-                                        borderRadius: BorderRadius.circular(20),
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(4.0),
-                                          child: Icon(Icons.delete_outline, size: 20, color: Colors.red.shade400),
-                                        ),
+                                      const SizedBox(width: 4),
+                                      IconButton(
+                                        icon: Icon(Icons.delete_outline, color: Colors.red.shade400),
+                                        onPressed: () => _deleteTransaction(tx),
+                                        iconSize: 22,
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(),
+                                        tooltip: 'Delete Transaction',
                                       ),
                                     ],
                                   ),
@@ -1005,24 +1144,48 @@ class _PosScreenState extends State<PosScreen> {
                               ),
                               const SizedBox(height: 12),
                               Text('${tx.date.day}/${tx.date.month}/${tx.date.year} at ${tx.date.hour}:${tx.date.minute.toString().padLeft(2, '0')}', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                              
+                              if (tx.customerName != null || tx.businessName != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4.0),
+                                  child: Text('${tx.customerName ?? ''} ${tx.businessName != null ? '(${tx.businessName})' : ''}', style: TextStyle(color: Colors.indigo.shade400, fontSize: 13, fontWeight: FontWeight.w500)),
+                                ),
+
                               const SizedBox(height: 4),
                               Text('$itemCount items • VAT: ${tx.includesVat ? "Included" : "Exempt"}', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
                               const Spacer(),
                               Row(
                                 children: [
+                                  if (tx.paymentStatus == 'Awaiting Payment')
+                                    Expanded(
+                                      flex: 2,
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(right: 8.0),
+                                        child: ElevatedButton.icon(
+                                          icon: const Icon(Icons.check, size: 16),
+                                          label: const Text('Mark Paid', style: TextStyle(fontSize: 12)),
+                                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade50, foregroundColor: Colors.green.shade700, elevation: 0),
+                                          onPressed: () {
+                                            setState(() { tx.paymentStatus = 'Paid'; });
+                                            _saveHistoryToDatabase();
+                                          },
+                                        ),
+                                      ),
+                                    ),
                                   Expanded(
-                                    child: OutlinedButton.icon(
-                                      icon: const Icon(Icons.receipt_long, size: 16),
-                                      label: const Text('Receipt'),
-                                      style: OutlinedButton.styleFrom(foregroundColor: Colors.grey.shade700, side: BorderSide(color: Colors.grey.shade300)),
+                                    flex: 1,
+                                    child: OutlinedButton(
+                                      style: OutlinedButton.styleFrom(foregroundColor: Colors.grey.shade700, side: BorderSide(color: Colors.grey.shade300), padding: EdgeInsets.zero),
                                       onPressed: () => _printReceipt(tx),
+                                      child: const Icon(Icons.receipt_long, size: 18),
                                     ),
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
+                                    flex: 2,
                                     child: ElevatedButton.icon(
                                       icon: const Icon(Icons.print, size: 16),
-                                      label: const Text('Invoice'),
+                                      label: const Text('Invoice', style: TextStyle(fontSize: 12)),
                                       style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEEF2FF), foregroundColor: const Color(0xFF4F46E5), elevation: 0),
                                       onPressed: () => _printInvoice(tx),
                                     ),
@@ -1224,8 +1387,8 @@ class _PosScreenState extends State<PosScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       elevation: 0,
                     ),
-                    onPressed: _cart.isEmpty ? null : _checkout,
-                    child: const Text('Charge Amount', style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
+                    onPressed: _cart.isEmpty ? null : _showCheckoutDialog,
+                    child: const Text('Checkout', style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
                   ),
                 ),
               ],
