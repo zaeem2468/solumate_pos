@@ -14,9 +14,10 @@ void main() {
 class Product {
   final String id;
   final String name;
-  final double price;
+  double price; // Made non-final so it can be edited
   final String category;
   final Color color;
+  final IconData icon;
 
   Product({
     required this.id,
@@ -24,9 +25,9 @@ class Product {
     required this.price,
     required this.category,
     required this.color,
+    required this.icon,
   });
 
-  // Convert to JSON for database storage
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
@@ -35,13 +36,13 @@ class Product {
     'color': color.value,
   };
 
-  // Create from JSON when loading from database
   factory Product.fromJson(Map<String, dynamic> json) => Product(
     id: json['id'],
     name: json['name'],
     price: json['price'],
     category: json['category'],
     color: Color(json['color']),
+    icon: Icons.water_drop, // Fallback, we'll re-map from ID below if needed
   );
 }
 
@@ -68,6 +69,8 @@ class OrderTransaction {
   final String id;
   final DateTime date;
   final double total;
+  final double subtotal;
+  final double vat;
   final List<CartItem> items;
   final bool includesVat;
 
@@ -75,6 +78,8 @@ class OrderTransaction {
     required this.id,
     required this.date,
     required this.total,
+    required this.subtotal,
+    required this.vat,
     required this.items,
     this.includesVat = true,
   });
@@ -83,6 +88,8 @@ class OrderTransaction {
     'id': id,
     'date': date.toIso8601String(),
     'total': total,
+    'subtotal': subtotal,
+    'vat': vat,
     'items': items.map((i) => i.toJson()).toList(),
     'includesVat': includesVat,
   };
@@ -91,36 +98,12 @@ class OrderTransaction {
     id: json['id'],
     date: DateTime.parse(json['date']),
     total: json['total'],
+    subtotal: json['subtotal'] ?? (json['total'] / 1.15), // Fallback for old data
+    vat: json['vat'] ?? (json['total'] - (json['total'] / 1.15)),
     items: (json['items'] as List).map((i) => CartItem.fromJson(i)).toList(),
     includesVat: json['includesVat'] ?? true,
   );
 }
-
-// --- MOCK INVENTORY ---
-
-final List<Product> inventory = [
-  // Thinners
-  Product(id: 'LCQ-750', name: '"A" Grade Lacquer (750ml)', price: 20.50, category: 'Thinners', color: Colors.blueGrey),
-  Product(id: 'LCQ-750-C', name: '"A" Grade Lacquer (750ml) - Case of 25', price: 512.50, category: 'Thinners', color: Colors.blueGrey),
-  Product(id: 'LCQ-005', name: '"A" Grade Lacquer (5L)', price: 119.00, category: 'Thinners', color: Colors.blueGrey),
-  
-  Product(id: 'ENM-750', name: 'QD Enamel Thinner (750ml)', price: 22.00, category: 'Thinners', color: Colors.indigo),
-  Product(id: 'ENM-750-C', name: 'QD Enamel Thinner (750ml) - Case of 25', price: 550.00, category: 'Thinners', color: Colors.indigo),
-  Product(id: 'ENM-005', name: 'QD Enamel Thinner (5L)', price: 120.00, category: 'Thinners', color: Colors.indigo),
-  
-  Product(id: 'TRP-750', name: 'Mineral Turpentine (750ml)', price: 25.00, category: 'Thinners', color: Colors.teal),
-  Product(id: 'TRP-750-C', name: 'Mineral Turpentine (750ml) - Case of 25', price: 625.00, category: 'Thinners', color: Colors.teal),
-  Product(id: 'TRP-005', name: 'Mineral Turpentine (5L)', price: 125.00, category: 'Thinners', color: Colors.teal),
-  
-  // Oils
-  Product(id: 'LIN-OIL', name: 'Raw Linseed Oil (750ml)', price: 46.00, category: 'Oils', color: Colors.amber.shade700),
-  Product(id: 'LIN-OIL-C', name: 'Raw Linseed Oil (750ml) - Case of 25', price: 1150.00, category: 'Oils', color: Colors.amber.shade700),
-  
-  // Spirits
-  Product(id: 'MET-750', name: 'Methylated Spirits (750ml)', price: 28.00, category: 'Spirits', color: Colors.purple.shade400),
-  Product(id: 'MET-750-C', name: 'Methylated Spirits (750ml) - Case of 25', price: 700.00, category: 'Spirits', color: Colors.purple.shade400),
-  Product(id: 'MET-330', name: 'Methylated Spirits (330ml)', price: 15.00, category: 'Spirits', color: Colors.purple.shade400),
-];
 
 // --- MAIN APP ---
 
@@ -130,16 +113,14 @@ class SolumatePosApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Solumate POS',
+      title: 'Solumate Business OS',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        primaryColor: const Color(0xFFD32F2F), // Solumate Red
-        scaffoldBackgroundColor: const Color(0xFFF4F6F8), // Light grey background
+        useMaterial3: true,
+        primaryColor: const Color(0xFF4F46E5), // Indigo 600
+        scaffoldBackgroundColor: const Color(0xFFF8FAFC), // Slate 50
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4F46E5)),
         fontFamily: 'Roboto',
-        colorScheme: ColorScheme.fromSwatch().copyWith(
-          primary: const Color(0xFFD32F2F),
-          secondary: const Color(0xFF1E1E2D),
-        ),
       ),
       home: const PosScreen(),
     );
@@ -157,21 +138,41 @@ class PosScreen extends StatefulWidget {
 
 class _PosScreenState extends State<PosScreen> {
   final List<CartItem> _cart = [];
-  final List<OrderTransaction> _history = []; // History State
+  final List<OrderTransaction> _history = [];
   
   String _selectedCategory = 'All';
-  int _currentMenuIndex = 0; // Navigation State: 0=POS, 1=History, 2=Stock, 3=Settings
-  bool _applyVat = true; // VAT Toggle State
+  int _currentMenuIndex = 1; // Default to POS tab
+  bool _applyVat = true;
 
   final List<String> _categories = ['All', 'Thinners', 'Oils', 'Spirits'];
+
+  // Master Inventory
+  late List<Product> _inventory;
 
   @override
   void initState() {
     super.initState();
-    _loadHistoryFromDatabase(); // Load saved data when app starts
+    _initializeInventory();
+    _loadHistoryFromDatabase();
   }
 
-  // Logic: Load from Local Database
+  void _initializeInventory() {
+    _inventory = [
+      Product(id: 'LCQ-750', name: '"A" Grade Lacquer (750ml)', price: 20.50, category: 'Thinners', color: Colors.blueGrey, icon: Icons.water_drop),
+      Product(id: 'LCQ-750-C', name: 'Lacquer (750ml) - Case', price: 512.50, category: 'Thinners', color: Colors.indigo, icon: Icons.inventory_2),
+      Product(id: 'LCQ-005', name: '"A" Grade Lacquer (5L)', price: 119.00, category: 'Thinners', color: Colors.blueGrey, icon: Icons.science),
+      Product(id: 'ENM-750', name: 'QD Enamel Thinner (750ml)', price: 22.00, category: 'Thinners', color: Colors.teal, icon: Icons.water_drop),
+      Product(id: 'ENM-750-C', name: 'Enamel (750ml) - Case', price: 550.00, category: 'Thinners', color: Colors.teal.shade700, icon: Icons.inventory_2),
+      Product(id: 'TRP-750', name: 'Mineral Turpentine (750ml)', price: 25.00, category: 'Thinners', color: Colors.cyan, icon: Icons.water_drop),
+      Product(id: 'TRP-750-C', name: 'Turpentine (750ml) - Case', price: 625.00, category: 'Thinners', color: Colors.cyan.shade700, icon: Icons.inventory_2),
+      Product(id: 'LIN-OIL', name: 'Raw Linseed Oil (750ml)', price: 46.00, category: 'Oils', color: Colors.amber.shade700, icon: Icons.water_drop),
+      Product(id: 'LIN-OIL-C', name: 'Linseed Oil (750ml) - Case', price: 1150.00, category: 'Oils', color: Colors.amber.shade900, icon: Icons.inventory_2),
+      Product(id: 'MET-750', name: 'Methylated Spirits (750ml)', price: 28.00, category: 'Spirits', color: Colors.purple.shade400, icon: Icons.science),
+      Product(id: 'MET-750-C', name: 'Meths (750ml) - Case', price: 700.00, category: 'Spirits', color: Colors.purple.shade700, icon: Icons.inventory_2),
+    ];
+  }
+
+  // --- DATABASE LOGIC ---
   Future<void> _loadHistoryFromDatabase() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -188,7 +189,6 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  // Logic: Save to Local Database
   Future<void> _saveHistoryToDatabase() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -199,7 +199,7 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  // Logic: Add item to cart
+  // --- POS LOGIC ---
   void _addToCart(Product product) {
     setState(() {
       var existingItem = _cart.where((item) => item.product.id == product.id).firstOrNull;
@@ -211,7 +211,6 @@ class _PosScreenState extends State<PosScreen> {
     });
   }
 
-  // Logic: Adjust quantity
   void _updateQuantity(CartItem item, int delta) {
     setState(() {
       item.quantity += delta;
@@ -221,118 +220,102 @@ class _PosScreenState extends State<PosScreen> {
     });
   }
 
-  // Logic: Clear Cart
+  Future<void> _editQuantityDialog(CartItem item) async {
+    TextEditingController controller = TextEditingController(text: item.quantity.toString());
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Quantity'),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Quantity'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              int? newQty = int.tryParse(controller.text);
+              if (newQty != null && newQty > 0) {
+                setState(() { item.quantity = newQty; });
+              } else if (newQty != null && newQty <= 0) {
+                setState(() { _cart.remove(item); });
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editPriceDialog(Product product) async {
+    TextEditingController controller = TextEditingController(text: product.price.toStringAsFixed(2));
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Edit Price: ${product.name}'),
+        content: TextField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'New Price (R)', prefixText: 'R '),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              double? newPrice = double.tryParse(controller.text);
+              if (newPrice != null && newPrice >= 0) {
+                setState(() {
+                  product.price = newPrice;
+                  // Auto-update any items currently in the cart to the new price
+                  for (var item in _cart) {
+                    if (item.product.id == product.id) {
+                      item.product.price = newPrice;
+                    }
+                  }
+                });
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _clearCart() {
     setState(() {
       _cart.clear();
-      _applyVat = true; // Reset VAT toggle on clear
+      _applyVat = true;
     });
   }
 
-  // Logic: Financials
   double get _subTotal => _cart.fold(0, (total, item) => total + item.totalPrice);
-  double get _vatAmount => _applyVat ? _subTotal * 0.15 : 0.0; // 15% VAT for South Africa
+  double get _vatAmount => _applyVat ? _subTotal * 0.15 : 0.0;
   double get _grandTotal => _subTotal + _vatAmount;
 
-  // Logic: Real Printer Integration
-  Future<void> _printReceipt(OrderTransaction tx) async {
-    final doc = pw.Document();
-
-    doc.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat.roll80, // Optimized for 80mm thermal receipt printers
-        build: (pw.Context context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              pw.Center(
-                child: pw.Text(
-                  'SOLUMATE',
-                  style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold),
-                ),
-              ),
-              pw.Center(child: pw.Text('Industrial Supplies')),
-              pw.Center(child: pw.Text('Krugersdorp, South Africa')),
-              pw.SizedBox(height: 10),
-              pw.Divider(),
-              pw.Text('Order: #${tx.id}'),
-              pw.Text('Date: ${tx.date.day}/${tx.date.month}/${tx.date.year} ${tx.date.hour}:${tx.date.minute.toString().padLeft(2, '0')}'),
-              pw.Divider(),
-              ...tx.items.map((item) => pw.Row(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Expanded(
-                    child: pw.Text(
-                      '${item.quantity}x ${item.product.name}',
-                      style: const pw.TextStyle(fontSize: 10),
-                    ),
-                  ),
-                  pw.Text(
-                    'R ${item.totalPrice.toStringAsFixed(2)}',
-                    style: const pw.TextStyle(fontSize: 10),
-                  ),
-                ],
-              )),
-              pw.Divider(),
-              if (tx.includesVat) ...[
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text('Subtotal:'),
-                    pw.Text('R ${(tx.total / 1.15).toStringAsFixed(2)}'),
-                  ],
-                ),
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text('VAT (15%):'),
-                    pw.Text('R ${(tx.total - (tx.total / 1.15)).toStringAsFixed(2)}'),
-                  ],
-                ),
-                pw.Divider(),
-              ],
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text('TOTAL', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-                  pw.Text('R ${tx.total.toStringAsFixed(2)}', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-                ],
-              ),
-              pw.Divider(),
-              pw.SizedBox(height: 10),
-              pw.Center(child: pw.Text('Thank you for your business!', style: const pw.TextStyle(fontSize: 10))),
-              pw.SizedBox(height: 20),
-            ],
-          );
-        },
-      ),
-    );
-
-    // This pops up the native print dialog allowing them to select their thermal printer
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat format) async => doc.save(),
-      name: 'Receipt_${tx.id}',
-    );
-  }
-
-  // Logic: Checkout
   void _checkout() {
     if (_cart.isEmpty) return;
 
-    // Save transaction to history
     final newTransaction = OrderTransaction(
       id: 'TXN-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
       date: DateTime.now(),
+      subtotal: _subTotal,
+      vat: _vatAmount,
       total: _grandTotal,
-      items: List.from(_cart), // Store a copy of the cart
+      items: List.from(_cart),
       includesVat: _applyVat,
     );
 
     setState(() {
-      _history.insert(0, newTransaction); // Add to the top of the history list
+      _history.insert(0, newTransaction);
     });
-    
-    _saveHistoryToDatabase(); // Permanently save to hard drive
+    _saveHistoryToDatabase();
 
     showDialog(
       context: context,
@@ -347,76 +330,244 @@ class _PosScreenState extends State<PosScreen> {
           ],
         ),
         content: Text(
-          'Order #${newTransaction.id}\nTotal paid: R ${_grandTotal.toStringAsFixed(2)}\n${_applyVat ? 'Includes 15% VAT.' : 'Zero-rated (No VAT).'}',
+          'Order #${newTransaction.id}\nTotal paid: R ${_grandTotal.toStringAsFixed(2)}',
           style: const TextStyle(fontSize: 16),
         ),
         actions: [
-          OutlinedButton.icon(
-            icon: const Icon(Icons.print),
-            label: const Text('Print Receipt'),
+          TextButton(
             onPressed: () {
               Navigator.pop(context);
               _printReceipt(newTransaction);
               _clearCart();
             },
+            child: const Text('Thermal Receipt'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _printInvoice(newTransaction);
+              _clearCart();
+            },
+            child: const Text('A4 Invoice'),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Theme.of(context).primaryColor,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor),
             onPressed: () {
               Navigator.pop(context);
               _clearCart();
             },
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-              child: Text('Start New Sale', style: TextStyle(color: Colors.white)),
-            ),
+            child: const Text('New Sale', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
   }
 
+  Future<void> _deleteTransaction(OrderTransaction tx) async {
+    bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Transaction'),
+        content: Text('Are you sure you want to permanently delete order #${tx.id}? This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      setState(() {
+        _history.removeWhere((item) => item.id == tx.id);
+      });
+      _saveHistoryToDatabase();
+    }
+  }
+
+  // --- PRINTING LOGIC ---
+  Future<void> _printReceipt(OrderTransaction tx) async {
+    final doc = pw.Document();
+    doc.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.roll80,
+        build: (pw.Context context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Center(child: pw.Text('SOLUMATE', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold))),
+              pw.Center(child: pw.Text('Industrial Supplies')),
+              pw.SizedBox(height: 10),
+              pw.Divider(),
+              pw.Text('Order: #${tx.id}'),
+              pw.Text('Date: ${tx.date.day}/${tx.date.month}/${tx.date.year} ${tx.date.hour}:${tx.date.minute.toString().padLeft(2, '0')}'),
+              pw.Divider(),
+              ...tx.items.map((item) => pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Expanded(child: pw.Text('${item.quantity}x ${item.product.name}', style: const pw.TextStyle(fontSize: 10))),
+                  pw.Text('R ${item.totalPrice.toStringAsFixed(2)}', style: const pw.TextStyle(fontSize: 10)),
+                ],
+              )),
+              pw.Divider(),
+              pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('Subtotal:'), pw.Text('R ${tx.subtotal.toStringAsFixed(2)}')]),
+              pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('VAT (${tx.includesVat ? "15%" : "Exempt"}):'), pw.Text('R ${tx.vat.toStringAsFixed(2)}')]),
+              pw.Divider(),
+              pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+                pw.Text('TOTAL', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                pw.Text('R ${tx.total.toStringAsFixed(2)}', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+              ]),
+              pw.SizedBox(height: 10),
+              pw.Center(child: pw.Text('*** CUSTOMER COPY ***', style: const pw.TextStyle(fontSize: 10))),
+              pw.SizedBox(height: 20),
+            ],
+          );
+        },
+      ),
+    );
+    await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => doc.save(), name: 'Receipt_${tx.id}');
+  }
+
+  Future<void> _printInvoice(OrderTransaction tx) async {
+    final doc = pw.Document();
+    doc.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.a4,
+        build: (pw.Context context) {
+          return pw.Padding(
+            padding: const pw.EdgeInsets.all(24),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text('SOLUMATE', style: pw.TextStyle(fontSize: 32, fontWeight: pw.FontWeight.bold, color: const PdfColor(0.2, 0.2, 0.6))),
+                        pw.Text('Industrial Supplies', style: const pw.TextStyle(fontSize: 14, color: PdfColors.grey700)),
+                        pw.Text('Krugersdorp, Gauteng', style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
+                      ]
+                    ),
+                    pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.end,
+                      children: [
+                        pw.Text('TAX INVOICE', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: PdfColors.grey400)),
+                        pw.SizedBox(height: 8),
+                        pw.Text('Invoice #: ${tx.id}', style: const pw.TextStyle(fontSize: 12)),
+                        pw.Text('Date: ${tx.date.day}/${tx.date.month}/${tx.date.year}', style: const pw.TextStyle(fontSize: 12)),
+                      ]
+                    )
+                  ]
+                ),
+                pw.SizedBox(height: 40),
+                // Table Header
+                pw.Container(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                  decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                  child: pw.Row(
+                    children: [
+                      pw.Expanded(flex: 4, child: pw.Text('Description', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                      pw.Expanded(flex: 1, child: pw.Text('Qty', textAlign: pw.TextAlign.center, style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                      pw.Expanded(flex: 2, child: pw.Text('Unit Price', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                      pw.Expanded(flex: 2, child: pw.Text('Total', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                    ]
+                  )
+                ),
+                pw.SizedBox(height: 8),
+                // Items
+                ...tx.items.map((item) => pw.Container(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                  decoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
+                  child: pw.Row(
+                    children: [
+                      pw.Expanded(flex: 4, child: pw.Text(item.product.name)),
+                      pw.Expanded(flex: 1, child: pw.Text(item.quantity.toString(), textAlign: pw.TextAlign.center)),
+                      pw.Expanded(flex: 2, child: pw.Text('R ${item.product.price.toStringAsFixed(2)}', textAlign: pw.TextAlign.right)),
+                      pw.Expanded(flex: 2, child: pw.Text('R ${item.totalPrice.toStringAsFixed(2)}', textAlign: pw.TextAlign.right)),
+                    ]
+                  )
+                )),
+                pw.SizedBox(height: 20),
+                // Totals Area
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.end,
+                  children: [
+                    pw.Container(
+                      width: 250,
+                      padding: const pw.EdgeInsets.all(12),
+                      decoration: pw.BoxDecoration(color: PdfColors.grey100, borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8))),
+                      child: pw.Column(
+                        children: [
+                          pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('Subtotal:'), pw.Text('R ${tx.subtotal.toStringAsFixed(2)}')]),
+                          pw.SizedBox(height: 4),
+                          pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('VAT (${tx.includesVat ? "15%" : "Exempt"}):'), pw.Text('R ${tx.vat.toStringAsFixed(2)}')]),
+                          pw.Divider(color: PdfColors.grey400),
+                          pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+                            pw.Text('Grand Total:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)), 
+                            pw.Text('R ${tx.total.toStringAsFixed(2)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16, color: const PdfColor(0.2, 0.2, 0.6)))
+                          ]),
+                        ]
+                      )
+                    )
+                  ]
+                )
+              ]
+            )
+          );
+        },
+      ),
+    );
+    await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => doc.save(), name: 'Invoice_${tx.id}');
+  }
+
+  // --- MAIN LAYOUT ---
   @override
   Widget build(BuildContext context) {
     bool isDesktop = MediaQuery.of(context).size.width > 850;
 
     return Scaffold(
-      // The AppBar is now shown on ALL devices to provide the hamburger menu button universally
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF1E1E2D),
-        iconTheme: const IconThemeData(color: Colors.white),
-        title: Text(
-          ['Point of Sale', 'History', 'Stock', 'Settings'][_currentMenuIndex],
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        centerTitle: true,
-      ),
-      
-      // The Drawer is now the universal navigation method
-      drawer: Drawer(width: 100, child: _buildSidebar(isDrawer: true)),
-      
       body: Row(
         children: [
-          // 2. MAIN WORKSPACE (Switches based on menu selection)
-          Expanded(
-            child: _buildCurrentView(isDesktop),
-          ),
-
-          // 3. RIGHT PANEL (Cart / Ticket - Only shows on POS screen on Desktop)
-          if (isDesktop && _currentMenuIndex == 0) _buildCartPanel(),
+          if (isDesktop) _buildSidebar(),
+          Expanded(child: _buildCurrentView(isDesktop)),
+          if (isDesktop && _currentMenuIndex == 1) _buildCartPanel(), // Cart on right for POS
         ],
       ),
-      // Mobile overlay cart floating button (only on POS screen on Mobile)
-      floatingActionButton: (!isDesktop && _cart.isNotEmpty && _currentMenuIndex == 0)
+      bottomNavigationBar: !isDesktop
+          ? BottomNavigationBar(
+              currentIndex: _currentMenuIndex,
+              onTap: (index) => setState(() => _currentMenuIndex = index),
+              type: BottomNavigationBarType.fixed,
+              selectedItemColor: Theme.of(context).primaryColor,
+              unselectedItemColor: Colors.grey.shade500,
+              items: const [
+                BottomNavigationBarItem(icon: Icon(Icons.bar_chart), label: 'Dashboard'),
+                BottomNavigationBarItem(icon: Icon(Icons.point_of_sale), label: 'POS'),
+                BottomNavigationBarItem(icon: Icon(Icons.inventory_2), label: 'Inventory'),
+                BottomNavigationBarItem(icon: Icon(Icons.receipt_long), label: 'Ledger'),
+              ],
+            )
+          : null,
+      floatingActionButton: (!isDesktop && _cart.isNotEmpty && _currentMenuIndex == 1)
           ? FloatingActionButton.extended(
               onPressed: () {
                 showModalBottomSheet(
                   context: context,
                   isScrollControlled: true,
-                  builder: (context) => SizedBox(height: MediaQuery.of(context).size.height * 0.85, child: _buildCartPanel()),
+                  backgroundColor: Colors.transparent,
+                  builder: (context) => Container(
+                    height: MediaQuery.of(context).size.height * 0.85,
+                    decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+                    child: _buildCartPanel()
+                  ),
                 );
               },
               backgroundColor: Theme.of(context).primaryColor,
@@ -428,44 +579,247 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  // --- VIEW ROUTER ---
+  // --- VIEWS ---
   Widget _buildCurrentView(bool isDesktop) {
     switch (_currentMenuIndex) {
+      case 0: return _buildDashboardView(isDesktop);
+      case 2: return _buildInventoryView();
+      case 3: return _buildLedgerView();
       case 1:
-        return _buildHistoryView();
-      case 2:
-        return _buildStockView();
-      case 3:
-        return _buildSettingsView();
-      case 0:
-      default:
-        return _buildPosView(isDesktop);
+      default: return _buildPosView(isDesktop);
     }
   }
 
-  // --- SCREENS ---
+  Widget _buildDashboardView(bool isDesktop) {
+    double totalRev = _history.fold(0, (sum, tx) => sum + tx.subtotal); // Dashboard usually shows Excl VAT
+    double aov = _history.isEmpty ? 0 : totalRev / _history.length;
+
+    // --- Data Aggregation for Custom Charts ---
+    Map<String, double> revByDay = {};
+    Map<String, double> revByCategory = {'Thinners': 0, 'Oils': 0, 'Spirits': 0};
+    
+    // Seed last 7 days to ensure empty days show up
+    DateTime now = DateTime.now();
+    for (int i = 6; i >= 0; i--) {
+      DateTime d = now.subtract(Duration(days: i));
+      String dayLabel = '${d.day}/${d.month}';
+      revByDay[dayLabel] = 0;
+    }
+
+    for (var tx in _history) {
+      // Day aggregation
+      String dayLabel = '${tx.date.day}/${tx.date.month}';
+      if (revByDay.containsKey(dayLabel)) {
+        revByDay[dayLabel] = revByDay[dayLabel]! + tx.subtotal;
+      }
+      // Category aggregation
+      for (var item in tx.items) {
+        String cat = item.product.category;
+        if (revByCategory.containsKey(cat)) {
+          revByCategory[cat] = revByCategory[cat]! + (item.product.price * item.quantity);
+        }
+      }
+    }
+
+    return SingleChildScrollView(
+      child: Container(
+        color: const Color(0xFFF8FAFC),
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Financial Dashboard', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+            const SizedBox(height: 8),
+            const Text('High-level overview and custom visual analytics.', style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 24),
+            
+            // Responsive KPI Cards
+            if (isDesktop)
+              Row(
+                children: [
+                  Expanded(child: _buildKpiCard('Total Revenue (Ex VAT)', 'R ${totalRev.toStringAsFixed(2)}', Icons.payments, Colors.teal)),
+                  const SizedBox(width: 16),
+                  Expanded(child: _buildKpiCard('Total Orders', '${_history.length}', Icons.shopping_cart, Colors.indigo)),
+                  const SizedBox(width: 16),
+                  Expanded(child: _buildKpiCard('Average Order Value', 'R ${aov.toStringAsFixed(2)}', Icons.trending_up, Colors.amber)),
+                ],
+              )
+            else
+              Column(
+                children: [
+                  _buildKpiCard('Total Revenue (Ex VAT)', 'R ${totalRev.toStringAsFixed(2)}', Icons.payments, Colors.teal),
+                  const SizedBox(height: 12),
+                  _buildKpiCard('Total Orders', '${_history.length}', Icons.shopping_cart, Colors.indigo),
+                  const SizedBox(height: 12),
+                  _buildKpiCard('Average Order Value', 'R ${aov.toStringAsFixed(2)}', Icons.trending_up, Colors.amber),
+                ],
+              ),
+            
+            const SizedBox(height: 32),
+            
+            // Responsive Detailed Custom Charts
+            if (isDesktop)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 3, child: _buildRevenueBarChart(revByDay)),
+                  const SizedBox(width: 24),
+                  Expanded(flex: 2, child: _buildCategorySalesChart(revByCategory, totalRev)),
+                ],
+              )
+            else
+              Column(
+                children: [
+                  _buildRevenueBarChart(revByDay),
+                  const SizedBox(height: 24),
+                  _buildCategorySalesChart(revByCategory, totalRev),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Custom Bar Chart built with native Flutter widgets (No extra packages needed!)
+  Widget _buildRevenueBarChart(Map<String, double> revByDay) {
+    double maxRev = revByDay.values.fold(0.0, (max, v) => v > max ? v : max);
+    if (maxRev == 0) maxRev = 1; // Prevent division by zero
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.grey.shade200)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Revenue Trend (Last 7 Days)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+          const SizedBox(height: 32),
+          SizedBox(
+            height: 200,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: revByDay.entries.map((e) {
+                double heightPct = e.value / maxRev;
+                return Column(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (e.value > 0) 
+                      Text(e.value >= 1000 ? '${(e.value/1000).toStringAsFixed(1)}k' : e.value.toStringAsFixed(0), 
+                           style: TextStyle(fontSize: 10, color: Colors.grey.shade600, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Container(
+                      width: 28,
+                      height: 150 * heightPct,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF4F46E5),
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(6)),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(e.key, style: TextStyle(fontSize: 11, color: Colors.grey.shade500, fontWeight: FontWeight.w500)),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Custom Progress Bar Distribution built with native Flutter widgets
+  Widget _buildCategorySalesChart(Map<String, double> catData, double totalRev) {
+    if (totalRev == 0) totalRev = 1; // Prevent division by zero
+    
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.grey.shade200)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Sales by Category', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+          const SizedBox(height: 24),
+          ...catData.entries.map((e) {
+            double pct = e.value / totalRev;
+            Color barColor = e.key == 'Thinners' ? Colors.teal : (e.key == 'Oils' ? Colors.amber.shade500 : Colors.purple.shade400);
+            
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(e.key, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                      Text('R ${e.value.toStringAsFixed(2)}', style: TextStyle(color: Colors.grey.shade600, fontSize: 13, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      value: pct,
+                      minHeight: 10,
+                      backgroundColor: Colors.grey.shade100,
+                      valueColor: AlwaysStoppedAnimation<Color>(barColor),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList(), // remove extra trailing padding visually handled by layout
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKpiCard(String title, String value, IconData icon, MaterialColor color) {
+    return Card(
+      elevation: 0,
+      margin: EdgeInsets.zero, // Important for clean mobile layout wrapping
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: Colors.grey.shade200)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: color.shade50, borderRadius: BorderRadius.circular(12)),
+              child: Icon(icon, color: color.shade600, size: 28),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: TextStyle(fontSize: 13, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 4),
+                  Text(value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _buildPosView(bool isDesktop) {
-    List<Product> displayedProducts = _selectedCategory == 'All'
-        ? inventory
-        : inventory.where((p) => p.category == _selectedCategory).toList();
+    List<Product> displayedProducts = _selectedCategory == 'All' ? _inventory : _inventory.where((p) => p.category == _selectedCategory).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Header & Category Bar
         Container(
-          padding: EdgeInsets.fromLTRB(24, isDesktop ? 24 : 16, 24, 16),
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
           color: Colors.white,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (isDesktop)
-                const Text(
-                  'Point of Sale',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF1E1E2D)),
-                ),
-              if (isDesktop) const SizedBox(height: 20),
+              const Text('Point of Sale', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              const SizedBox(height: 20),
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(
@@ -475,19 +829,12 @@ class _PosScreenState extends State<PosScreen> {
                       padding: const EdgeInsets.only(right: 12.0),
                       child: ChoiceChip(
                         label: Text(category),
-                        labelStyle: TextStyle(
-                          color: isSelected ? Colors.white : Colors.grey.shade800,
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                        ),
                         selected: isSelected,
-                        selectedColor: Theme.of(context).primaryColor,
-                        backgroundColor: Colors.grey.shade200,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        onSelected: (selected) {
-                          setState(() {
-                            _selectedCategory = category;
-                          });
-                        },
+                        selectedColor: const Color(0xFF1E293B),
+                        labelStyle: TextStyle(color: isSelected ? Colors.white : Colors.grey.shade700, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal),
+                        backgroundColor: Colors.grey.shade100,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.transparent)),
+                        onSelected: (_) => setState(() => _selectedCategory = category),
                       ),
                     );
                   }).toList(),
@@ -496,134 +843,41 @@ class _PosScreenState extends State<PosScreen> {
             ],
           ),
         ),
-
-        // Product Grid
         Expanded(
           child: GridView.builder(
             padding: const EdgeInsets.all(24),
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: isDesktop ? 4 : 2,
-              childAspectRatio: 0.85,
-              crossAxisSpacing: 20,
-              mainAxisSpacing: 20,
+              childAspectRatio: isDesktop ? 0.9 : 0.85, // Better aspect ratio for narrow mobile screens
+              crossAxisSpacing: 16,
+              mainAxisSpacing: 16,
             ),
             itemCount: displayedProducts.length,
             itemBuilder: (context, index) {
               final product = displayedProducts[index];
-              return _buildProductCard(product);
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHistoryView() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(24),
-          color: Colors.white,
-          child: const Text('Transaction History', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF1E1E2D))),
-        ),
-        Expanded(
-          child: _history.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.history, size: 80, color: Colors.grey.shade300),
-                      const SizedBox(height: 16),
-                      Text('No past transactions found.', style: TextStyle(fontSize: 18, color: Colors.grey.shade500)),
-                    ],
-                  ),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.all(24),
-                  itemCount: _history.length,
-                  itemBuilder: (context, index) {
-                    final tx = _history[index];
-                    return Card(
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        side: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      margin: const EdgeInsets.only(bottom: 12),
-                      child: ExpansionTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Colors.green.shade100,
-                          child: const Icon(Icons.check, color: Colors.green),
+              return InkWell(
+                onTap: () => _addToCart(product),
+                borderRadius: BorderRadius.circular(16),
+                child: Card(
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: Colors.grey.shade200)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(color: product.color.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                          child: Icon(product.icon, color: product.color, size: 32),
                         ),
-                        title: Text('Order #${tx.id}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                        subtitle: Text('${tx.date.day}/${tx.date.month}/${tx.date.year} at ${tx.date.hour}:${tx.date.minute.toString().padLeft(2, '0')}'),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('R ${tx.total.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                            const SizedBox(width: 16),
-                            IconButton(
-                              icon: const Icon(Icons.print, color: Colors.grey),
-                              onPressed: () => _printReceipt(tx),
-                              tooltip: 'Print Receipt',
-                            ),
-                          ],
-                        ),
-                        children: [
-                          if (!tx.includesVat)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 8),
-                              alignment: Alignment.centerLeft,
-                              child: const Text('Note: This order was processed without VAT.', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.red)),
-                            ),
-                          ...tx.items.map((item) {
-                            return ListTile(
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 0),
-                              title: Text(item.product.name, style: const TextStyle(fontSize: 14)),
-                              trailing: Text('${item.quantity} x R ${item.product.price.toStringAsFixed(2)}'),
-                            );
-                          }).toList(),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildStockView() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(24),
-          color: Colors.white,
-          child: const Text('Inventory Management', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF1E1E2D))),
-        ),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(24),
-            itemCount: inventory.length,
-            itemBuilder: (context, index) {
-              final item = inventory[index];
-              return Card(
-                elevation: 0,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.grey.shade300)),
-                margin: const EdgeInsets.only(bottom: 12),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                  leading: CircleAvatar(
-                    backgroundColor: item.color.withOpacity(0.2),
-                    child: Icon(Icons.water_drop, color: item.color),
+                        const Spacer(),
+                        Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, height: 1.2), maxLines: 2, overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 8),
+                        Text('R ${product.price.toStringAsFixed(2)}', style: TextStyle(color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold, fontSize: 16)),
+                      ],
+                    ),
                   ),
-                  title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('ID: ${item.id}  •  Category: ${item.category}'),
-                  trailing: Text('R ${item.price.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               );
             },
@@ -633,178 +887,223 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  Widget _buildSettingsView() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(24),
-          color: Colors.white,
-          child: const Text('System Settings', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF1E1E2D))),
-        ),
-        Expanded(
-          child: ListView(
+  Widget _buildInventoryView() {
+    return Container(
+      color: Colors.white,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
             padding: const EdgeInsets.all(24),
+            width: double.infinity,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Inventory Management', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                const SizedBox(height: 8),
+                Text('Tap the edit icon next to any price to update it.', style: TextStyle(color: Colors.grey.shade600)),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              itemCount: _inventory.length,
+              itemBuilder: (context, index) {
+                final p = _inventory[index];
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade200),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    leading: CircleAvatar(backgroundColor: p.color.withOpacity(0.1), child: Icon(p.icon, color: p.color)),
+                    title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text('ID: ${p.id}  •  ${p.category}'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('R ${p.price.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: Icon(Icons.edit, color: Colors.grey.shade400, size: 20),
+                          onPressed: () => _editPriceDialog(p),
+                          tooltip: 'Edit Price',
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLedgerView() {
+    return Container(
+      color: const Color(0xFFF8FAFC),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            width: double.infinity,
+            child: const Text('Transaction Ledger', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+          ),
+          Expanded(
+            child: _history.isEmpty
+                ? Center(child: Text('No transactions recorded yet.', style: TextStyle(color: Colors.grey.shade500, fontSize: 16)))
+                : GridView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                    gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 400,
+                      childAspectRatio: 1.5,
+                      crossAxisSpacing: 16,
+                      mainAxisSpacing: 16,
+                    ),
+                    itemCount: _history.length,
+                    itemBuilder: (context, index) {
+                      final tx = _history[index];
+                      int itemCount = tx.items.fold(0, (sum, item) => sum + item.quantity);
+                      return Card(
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: Colors.grey.shade200)),
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(6)),
+                                    child: Text(tx.id, style: const TextStyle(color: Color(0xFF4F46E5), fontWeight: FontWeight.bold, fontSize: 12)),
+                                  ),
+                                  Row(
+                                    children: [
+                                      Text('R ${tx.total.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                                      const SizedBox(width: 8),
+                                      InkWell(
+                                        onTap: () => _deleteTransaction(tx),
+                                        borderRadius: BorderRadius.circular(20),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(4.0),
+                                          child: Icon(Icons.delete_outline, size: 20, color: Colors.red.shade400),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Text('${tx.date.day}/${tx.date.month}/${tx.date.year} at ${tx.date.hour}:${tx.date.minute.toString().padLeft(2, '0')}', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                              const SizedBox(height: 4),
+                              Text('$itemCount items • VAT: ${tx.includesVat ? "Included" : "Exempt"}', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+                              const Spacer(),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      icon: const Icon(Icons.receipt_long, size: 16),
+                                      label: const Text('Receipt'),
+                                      style: OutlinedButton.styleFrom(foregroundColor: Colors.grey.shade700, side: BorderSide(color: Colors.grey.shade300)),
+                                      onPressed: () => _printReceipt(tx),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      icon: const Icon(Icons.print, size: 16),
+                                      label: const Text('Invoice'),
+                                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEEF2FF), foregroundColor: const Color(0xFF4F46E5), elevation: 0),
+                                      onPressed: () => _printInvoice(tx),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- REUSABLE COMPONENTS ---
+  Widget _buildSidebar() {
+    return Container(
+      width: 250,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(right: BorderSide(color: Colors.grey.shade200)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Row(
+              children: [
+                Container(
+                  width: 32, height: 32,
+                  decoration: BoxDecoration(color: const Color(0xFF4F46E5), borderRadius: BorderRadius.circular(8)),
+                  child: const Center(child: Text('S', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18))),
+                ),
+                const SizedBox(width: 12),
+                const Text('Solumate.', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _buildSidebarItem(Icons.bar_chart, 'Dashboard', 0),
+          _buildSidebarItem(Icons.point_of_sale, 'Point of Sale', 1),
+          _buildSidebarItem(Icons.inventory_2, 'Inventory', 2),
+          _buildSidebarItem(Icons.receipt_long, 'Transaction Ledger', 3),
+          const Spacer(),
+          const Divider(),
+          ListTile(
+            leading: CircleAvatar(backgroundColor: Colors.grey.shade200, child: Text('MW', style: TextStyle(color: Colors.grey.shade700))),
+            title: const Text('M. Wajah', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            subtitle: const Text('Administrator', style: TextStyle(fontSize: 12)),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebarItem(IconData icon, String label, int index) {
+    bool isActive = _currentMenuIndex == index;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: InkWell(
+        onTap: () => setState(() => _currentMenuIndex = index),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isActive ? const Color(0xFFEEF2FF) : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
             children: [
-              _buildSettingsCard(Icons.store, 'Store Details', 'Solumate Industrial Supplies\nKrugersdorp, South Africa'),
-              const SizedBox(height: 16),
-              _buildSettingsCard(Icons.receipt_long, 'Tax Settings', 'Standard VAT rate: 15%'),
-              const SizedBox(height: 16),
-              _buildSettingsCard(Icons.print, 'Hardware', 'Receipt Printer: Ready\nCash Drawer: Not Connected'),
-              const SizedBox(height: 16),
-              _buildSettingsCard(Icons.storage, 'Database', 'Local Persistent Storage: Active\nTransactions are saved securely.'),
+              Icon(icon, color: isActive ? const Color(0xFF4F46E5) : Colors.grey.shade500, size: 24),
+              const SizedBox(width: 16),
+              Text(label, style: TextStyle(color: isActive ? const Color(0xFF4F46E5) : Colors.grey.shade600, fontWeight: isActive ? FontWeight.bold : FontWeight.w500)),
             ],
           ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSettingsCard(IconData icon, String title, String subtitle) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.grey.shade300)),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(20),
-        leading: Icon(icon, size: 32, color: Theme.of(context).primaryColor),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 8.0),
-          child: Text(subtitle, style: const TextStyle(fontSize: 14, height: 1.5)),
-        ),
-        trailing: const Icon(Icons.chevron_right),
-      ),
-    );
-  }
-
-  // --- WIDGET BUILDERS ---
-
-  Widget _buildSidebar({bool isDrawer = false}) {
-    return Container(
-      width: 100,
-      color: const Color(0xFF1E1E2D),
-      child: SafeArea(
-        child: Column(
-          children: [
-            const SizedBox(height: 30),
-            // Solumate "S" Logo placeholder
-            Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: Theme.of(context).primaryColor,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Center(
-                child: Text('S', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-              ),
-            ),
-            const SizedBox(height: 40),
-            _buildSidebarIcon(Icons.point_of_sale, "POS", 0, isDrawer: isDrawer),
-            _buildSidebarIcon(Icons.history, "History", 1, isDrawer: isDrawer),
-            _buildSidebarIcon(Icons.inventory_2_outlined, "Stock", 2, isDrawer: isDrawer),
-            const Spacer(),
-            _buildSidebarIcon(Icons.settings_outlined, "Settings", 3, isDrawer: isDrawer),
-            const SizedBox(height: 20),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSidebarIcon(IconData icon, String label, int index, {bool isDrawer = false}) {
-    bool isActive = _currentMenuIndex == index;
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _currentMenuIndex = index;
-        });
-        if (isDrawer) {
-          Navigator.pop(context); // Close the drawer after selecting
-        }
-      },
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 16.0),
-        child: Column(
-          children: [
-            Icon(icon, color: isActive ? Theme.of(context).primaryColor : Colors.grey.shade500, size: 28),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: isActive ? Theme.of(context).primaryColor : Colors.grey.shade500,
-                fontSize: 12,
-                fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildProductCard(Product product) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Colors.grey.shade300, width: 1),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => _addToCart(product),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Top Color bar representing the product category
-            Expanded(
-              flex: 3,
-              child: Container(
-                color: product.color.withOpacity(0.1),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(product.name.contains("Case") ? Icons.view_in_ar : Icons.water_drop, size: 48, color: product.color),
-                      if (product.name.contains("Case"))
-                        Container(
-                          margin: const EdgeInsets.only(top: 4),
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(color: product.color, borderRadius: BorderRadius.circular(4)),
-                          child: const Text("CASE OF 25", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                        )
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            // Product Details
-            Expanded(
-              flex: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      product.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'R ${product.price.toStringAsFixed(2)}',
-                      style: TextStyle(color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold, fontSize: 16),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -813,30 +1112,24 @@ class _PosScreenState extends State<PosScreen> {
   Widget _buildCartPanel() {
     return Container(
       width: 400,
-      color: Colors.white,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(left: BorderSide(color: Colors.grey.shade200)),
+      ),
       child: Column(
         children: [
-          // Cart Header
           Container(
             padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-            ),
+            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Colors.grey.shade100)), color: const Color(0xFFF8FAFC)),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Current Order', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                const Text('Current Order', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
                 if (_cart.isNotEmpty)
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.red),
-                    onPressed: _clearCart,
-                    tooltip: 'Clear Cart',
-                  ),
+                  TextButton(onPressed: _clearCart, style: TextButton.styleFrom(foregroundColor: Colors.red), child: const Text('Clear')),
               ],
             ),
           ),
-
-          // Cart Items
           Expanded(
             child: _cart.isEmpty
                 ? Center(
@@ -845,7 +1138,7 @@ class _PosScreenState extends State<PosScreen> {
                       children: [
                         Icon(Icons.shopping_cart_outlined, size: 64, color: Colors.grey.shade300),
                         const SizedBox(height: 16),
-                        Text('No items added yet', style: TextStyle(color: Colors.grey.shade500, fontSize: 16)),
+                        Text('No items added yet', style: TextStyle(color: Colors.grey.shade500)),
                       ],
                     ),
                   )
@@ -862,102 +1155,77 @@ class _PosScreenState extends State<PosScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(item.product.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                Text(item.product.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF1E293B))),
                                 const SizedBox(height: 4),
-                                Text('R ${item.product.price.toStringAsFixed(2)}', style: TextStyle(color: Colors.grey.shade600)),
+                                Text('R ${item.product.price.toStringAsFixed(2)} each', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
                               ],
                             ),
                           ),
-                          // Quantity Controls
                           Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade300),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
+                            decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(8), color: const Color(0xFFF8FAFC)),
                             child: Row(
                               children: [
+                                InkWell(onTap: () => _updateQuantity(item, -1), child: const Padding(padding: EdgeInsets.all(8.0), child: Icon(Icons.remove, size: 16))),
                                 InkWell(
-                                  onTap: () => _updateQuantity(item, -1),
-                                  child: const Padding(padding: EdgeInsets.all(8.0), child: Icon(Icons.remove, size: 16)),
+                                  onTap: () => _editQuantityDialog(item),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                                    child: Text('${item.quantity}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                  ),
                                 ),
-                                Text('${item.quantity}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                InkWell(
-                                  onTap: () => _updateQuantity(item, 1),
-                                  child: const Padding(padding: EdgeInsets.all(8.0), child: Icon(Icons.add, size: 16)),
-                                ),
+                                InkWell(onTap: () => _updateQuantity(item, 1), child: const Padding(padding: EdgeInsets.all(8.0), child: Icon(Icons.add, size: 16))),
                               ],
                             ),
                           ),
                           const SizedBox(width: 16),
-                          // Line Total
                           SizedBox(
-                            width: 70,
-                            child: Text(
-                              'R ${item.totalPrice.toStringAsFixed(2)}',
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                              textAlign: TextAlign.right,
-                            ),
+                            width: 80,
+                            child: Text('R ${item.totalPrice.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), textAlign: TextAlign.right),
                           ),
                         ],
                       );
                     },
                   ),
           ),
-
-          // Financial Summary & Checkout
           Container(
             padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade50,
-              border: Border(top: BorderSide(color: Colors.grey.shade200)),
-            ),
+            decoration: BoxDecoration(border: Border(top: BorderSide(color: Colors.grey.shade200)), color: const Color(0xFFF8FAFC)),
             child: Column(
               children: [
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Include 15% VAT', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const Text('Apply VAT (15%)', style: TextStyle(fontWeight: FontWeight.w500)),
                     Switch(
                       value: _applyVat,
-                      activeColor: Theme.of(context).primaryColor,
-                      onChanged: (val) {
-                        setState(() {
-                          _applyVat = val;
-                        });
-                      },
+                      activeColor: const Color(0xFF4F46E5),
+                      onChanged: (val) => setState(() => _applyVat = val),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                _buildSummaryRow('Subtotal', _subTotal),
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Subtotal', style: TextStyle(color: Colors.grey.shade600)), Text('R ${_subTotal.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold))]),
                 if (_applyVat) const SizedBox(height: 8),
-                if (_applyVat) _buildSummaryRow('VAT (15%)', _vatAmount),
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12.0),
-                  child: Divider(),
-                ),
+                if (_applyVat) Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('VAT', style: TextStyle(color: Colors.grey.shade600)), Text('R ${_vatAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold))]),
+                const Padding(padding: EdgeInsets.symmetric(vertical: 16.0), child: Divider(height: 1)),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Total', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                    Text(
-                      'R ${_grandTotal.toStringAsFixed(2)}',
-                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor),
-                    ),
+                    const Text('Total', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                    Text('R ${_grandTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Color(0xFF4F46E5))),
                   ],
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 24),
                 SizedBox(
-                  width: double.infinity,
-                  height: 56,
+                  width: double.infinity, height: 56,
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Theme.of(context).primaryColor,
+                      backgroundColor: const Color(0xFF4F46E5),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       elevation: 0,
                     ),
                     onPressed: _cart.isEmpty ? null : _checkout,
-                    child: const Text('Charge', style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
+                    child: const Text('Charge Amount', style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
                   ),
                 ),
               ],
@@ -965,16 +1233,6 @@ class _PosScreenState extends State<PosScreen> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildSummaryRow(String label, double amount) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label, style: TextStyle(color: Colors.grey.shade600, fontSize: 14)),
-        Text('R ${amount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-      ],
     );
   }
 }
