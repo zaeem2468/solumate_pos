@@ -21,9 +21,9 @@ class SolumatePosApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        primaryColor: const Color(0xFF4F46E5), 
+        primaryColor: const Color(0xFFDC2626), 
         scaffoldBackgroundColor: const Color(0xFFF4F7FA), 
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4F46E5)),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFDC2626)),
         fontFamily: 'Roboto', 
       ),
       home: const SplashScreen(),
@@ -44,6 +44,8 @@ class SplashScreen extends StatefulWidget {
 class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
+  late Animation<double> _scaleAnimation;
+  late Animation<double> _slideAnimation;
 
   @override
   void initState() {
@@ -54,6 +56,9 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
       duration: const Duration(milliseconds: 1500),
     );
     _fadeAnimation = CurvedAnimation(parent: _animationController, curve: Curves.easeIn);
+    
+    _scaleAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(CurvedAnimation(parent: _animationController, curve: const Interval(0.0, 0.7, curve: Curves.elasticOut)));
+    _slideAnimation = Tween<double>(begin: 50.0, end: 0.0).animate(CurvedAnimation(parent: _animationController, curve: const Interval(0.4, 1.0, curve: Curves.easeOutCubic)));
     
     _animationController.forward();
 
@@ -85,7 +90,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
         width: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF818CF8), Color(0xFF4F46E5), Color(0xFF312E81)],
+            colors: [Color(0xFFEF4444), Color(0xFFDC2626), Color(0xFF000000)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -95,32 +100,45 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                width: 120,
-                height: 120,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(32),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 30, offset: const Offset(0, 15))
-                  ],
-                ),
-                child: const Center(
-                  child: Text('S', style: TextStyle(color: Color(0xFF4F46E5), fontWeight: FontWeight.w900, fontSize: 80)),
+              ScaleTransition(
+                scale: _scaleAnimation,
+                child: Container(
+                  width: 120,
+                  height: 120,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(32),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 30, offset: const Offset(0, 15))
+                    ],
+                  ),
+                  child: const Center(
+                    child: Text('S', style: TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.w900, fontSize: 80)),
+                  ),
                 ),
               ),
               const SizedBox(height: 32),
-              const Text(
-                'Solumate.',
-                style: TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -1),
+              AnimatedBuilder(
+                animation: _slideAnimation,
+                builder: (context, child) => Transform.translate(
+                  offset: Offset(0, _slideAnimation.value),
+                  child: Column(
+                    children: const [
+                      Text(
+                        'Solumate.',
+                        style: TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -1),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'BUSINESS OS',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white70, letterSpacing: 6),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'BUSINESS OS',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white70, letterSpacing: 6),
-              ),
-              const SizedBox(height: 64),
-              const CircularProgressIndicator(color: Colors.white),
+              const SizedBox(height: 80),
+              const SizedBox(width: 40, height: 40, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)),
             ],
           ),
         ),
@@ -147,6 +165,11 @@ class _PosScreenState extends State<PosScreen> {
   final List<OrderTransaction> _history = [];
   final List<Customer> _customers = [];
   final List<Expense> _expenses = [];
+  final List<Supplier> _suppliers = [];
+  final List<Refund> _refunds = [];
+  final List<Quote> _quotes = [];
+  final List<User> _users = [];
+  final List<StockAdjustment> _stockAdjustments = [];
   List<Product> _inventory = [];
   
   String _selectedCategory = 'All';
@@ -162,6 +185,7 @@ class _PosScreenState extends State<PosScreen> {
   double _globalVatRate = 0.15; 
   
   final TextEditingController _searchController = TextEditingController(); 
+  final TextEditingController _ledgerSearchController = TextEditingController();
   StateSetter? _cartSheetSetState; 
 
   final List<String> _categories = ['All', 'Thinners', 'Oils', 'Spirits', 'Other'];
@@ -176,7 +200,7 @@ class _PosScreenState extends State<PosScreen> {
   // --- DATABASE LOGIC ---
   Future<void> _initializeData() async {
     final prefs = await SharedPreferences.getInstance();
-    
+
     _storeName = prefs.getString('solumate_store_name') ?? 'SOLUMATE';
     _storeAddress = prefs.getString('solumate_store_address') ?? 'Krugersdorp, Gauteng';
     _storePhone = prefs.getString('solumate_store_phone') ?? '074 299 7866';
@@ -196,24 +220,61 @@ class _PosScreenState extends State<PosScreen> {
     final String? expData = prefs.getString('solumate_expenses');
     if (expData != null) _expenses.addAll((jsonDecode(expData) as List).map((item) => Expense.fromJson(item)).toList());
 
-    setState(() {}); 
+    final String? suppData = prefs.getString('solumate_suppliers');
+    if (suppData != null) _suppliers.addAll((jsonDecode(suppData) as List).map((item) => Supplier.fromJson(item)).toList());
+
+    final String? refundData = prefs.getString('solumate_refunds');
+    if (refundData != null) _refunds.addAll((jsonDecode(refundData) as List).map((item) => Refund.fromJson(item)).toList());
+
+    final String? quoteData = prefs.getString('solumate_quotes');
+    if (quoteData != null) _quotes.addAll((jsonDecode(quoteData) as List).map((item) => Quote.fromJson(item)).toList());
+
+    final String? userData = prefs.getString('solumate_users');
+    if (userData != null) _users.addAll((jsonDecode(userData) as List).map((item) => User.fromJson(item)).toList());
+    if (_users.isEmpty) { _loadDefaultUsers(); _saveUsersToDatabase(); }
+
+    final String? stockAdjData = prefs.getString('solumate_stock_adjustments');
+    if (stockAdjData != null) _stockAdjustments.addAll((jsonDecode(stockAdjData) as List).map((item) => StockAdjustment.fromJson(item)).toList());
+
+    setState(() {});
   }
 
   void _loadDefaultInventory() {
     _inventory = [
-      Product(id: 'LCQ-750', name: '"A" Grade Lacquer (750ml)', price: 20.50, category: 'Thinners', color: Colors.blueGrey, icon: Icons.water_drop),
-      Product(id: 'LCQ-750-C', name: 'Lacquer (750ml) - Case', price: 512.50, category: 'Thinners', color: Colors.indigo, icon: Icons.inventory_2),
-      Product(id: 'LCQ-005', name: '"A" Grade Lacquer (5L)', price: 119.00, category: 'Thinners', color: Colors.blueGrey, icon: Icons.science),
-      Product(id: 'ENM-750', name: 'QD Enamel Thinner (750ml)', price: 22.00, category: 'Thinners', color: Colors.teal, icon: Icons.water_drop),
-      Product(id: 'ENM-750-C', name: 'Enamel (750ml) - Case', price: 550.00, category: 'Thinners', color: Colors.teal.shade700, icon: Icons.inventory_2),
-      Product(id: 'ENM-005', name: 'QD Enamel (5L)', price: 120.00, category: 'Thinners', color: Colors.teal.shade900, icon: Icons.format_paint),
-      Product(id: 'TRP-750', name: 'Mineral Turpentine (750ml)', price: 25.00, category: 'Thinners', color: Colors.cyan, icon: Icons.water_drop),
-      Product(id: 'TRP-750-C', name: 'Turpentine (750ml) - Case', price: 625.00, category: 'Thinners', color: Colors.cyan.shade700, icon: Icons.inventory_2),
-      Product(id: 'LIN-OIL', name: 'Raw Linseed Oil (750ml)', price: 46.00, category: 'Oils', color: Colors.amber.shade700, icon: Icons.water_drop),
-      Product(id: 'LIN-OIL-C', name: 'Linseed Oil (750ml) - Case', price: 1150.00, category: 'Oils', color: Colors.amber.shade900, icon: Icons.inventory_2),
-      Product(id: 'MET-750', name: 'Methylated Spirits (750ml)', price: 28.00, category: 'Spirits', color: Colors.purple.shade400, icon: Icons.science),
-      Product(id: 'MET-750-C', name: 'Meths (750ml) - Case', price: 700.00, category: 'Spirits', color: Colors.purple.shade700, icon: Icons.inventory_2),
+      Product(id: 'LCQ-750', name: '"A" Grade Lacquer (750ml)', price: 20.50, category: 'Thinners', color: Colors.blueGrey, icon: Icons.water_drop, stockQuantity: 50),
+      Product(id: 'LCQ-750-C', name: 'Lacquer (750ml) - Case', price: 512.50, category: 'Thinners', color: Colors.indigo, icon: Icons.inventory_2, stockQuantity: 10),
+      Product(id: 'LCQ-005', name: '"A" Grade Lacquer (5L)', price: 119.00, category: 'Thinners', color: Colors.blueGrey, icon: Icons.science, stockQuantity: 20),
+      Product(id: 'ENM-750', name: 'QD Enamel Thinner (750ml)', price: 22.00, category: 'Thinners', color: Colors.teal, icon: Icons.water_drop, stockQuantity: 40),
+      Product(id: 'ENM-750-C', name: 'Enamel (750ml) - Case', price: 550.00, category: 'Thinners', color: Colors.teal.shade700, icon: Icons.inventory_2, stockQuantity: 5),
+      Product(id: 'ENM-005', name: 'QD Enamel (5L)', price: 120.00, category: 'Thinners', color: Colors.teal.shade900, icon: Icons.format_paint, stockQuantity: 15),
+      Product(id: 'TRP-750', name: 'Mineral Turpentine (750ml)', price: 25.00, category: 'Thinners', color: Colors.cyan, icon: Icons.water_drop, stockQuantity: 60),
+      Product(id: 'TRP-750-C', name: 'Turpentine (750ml) - Case', price: 625.00, category: 'Thinners', color: Colors.cyan.shade700, icon: Icons.inventory_2, stockQuantity: 8),
+      Product(id: 'LIN-OIL', name: 'Raw Linseed Oil (750ml)', price: 46.00, category: 'Oils', color: Colors.amber.shade700, icon: Icons.water_drop, stockQuantity: 25),
+      Product(id: 'LIN-OIL-C', name: 'Linseed Oil (750ml) - Case', price: 1150.00, category: 'Oils', color: Colors.amber.shade900, icon: Icons.inventory_2, stockQuantity: 4),
+      Product(id: 'MET-750', name: 'Methylated Spirits (750ml)', price: 28.00, category: 'Spirits', color: Colors.purple.shade400, icon: Icons.science, stockQuantity: 30),
+      Product(id: 'MET-750-C', name: 'Meths (750ml) - Case', price: 700.00, category: 'Spirits', color: Colors.purple.shade700, icon: Icons.inventory_2, stockQuantity: 6),
     ];
+  }
+
+  void _loadDefaultUsers() {
+    _users.addAll([
+      User(
+        id: 'USR-ADMIN',
+        username: 'admin',
+        fullName: 'System Administrator',
+        role: 'Admin',
+        email: 'admin@solumate.com',
+        createdAt: DateTime.now(),
+      ),
+      User(
+        id: 'USR-MANAGER',
+        username: 'manager',
+        fullName: 'Store Manager',
+        role: 'Manager',
+        email: 'manager@solumate.com',
+        createdAt: DateTime.now(),
+      ),
+    ]);
   }
 
   Future<void> _saveInventoryToDatabase() async {
@@ -234,6 +295,31 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _saveExpensesToDatabase() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('solumate_expenses', jsonEncode(_expenses.map((e) => e.toJson()).toList()));
+  }
+
+  Future<void> _saveUsersToDatabase() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('solumate_users', jsonEncode(_users.map((u) => u.toJson()).toList()));
+  }
+
+  Future<void> _saveSuppliersToDatabase() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('solumate_suppliers', jsonEncode(_suppliers.map((s) => s.toJson()).toList()));
+  }
+
+  Future<void> _saveRefundsToDatabase() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('solumate_refunds', jsonEncode(_refunds.map((r) => r.toJson()).toList()));
+  }
+
+  Future<void> _saveQuotesToDatabase() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('solumate_quotes', jsonEncode(_quotes.map((q) => q.toJson()).toList()));
+  }
+
+  Future<void> _saveStockAdjustmentsToDatabase() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('solumate_stock_adjustments', jsonEncode(_stockAdjustments.map((sa) => sa.toJson()).toList()));
   }
 
   Future<void> _saveSettings() async {
@@ -356,6 +442,25 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  Future<void> _deleteProduct(Product product) async {
+    bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Delete Product'),
+        content: Text('Are you sure you want to delete "${product.name}"? This will remove it from the inventory list.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: () => Navigator.pop(context, true), child: const Text('Delete', style: TextStyle(color: Colors.white))),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      setState(() { _inventory.remove(product); });
+      _saveInventoryToDatabase();
+    }
+  }
+
   Future<void> _editPriceDialog(Product product) async {
     TextEditingController controller = TextEditingController(text: product.price.toStringAsFixed(2));
     await showDialog(
@@ -396,6 +501,7 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _addNewProductDialog() async {
     TextEditingController nameCtrl = TextEditingController();
     TextEditingController priceCtrl = TextEditingController();
+    TextEditingController stockCtrl = TextEditingController(text: '0');
     String newCategory = 'Other';
 
     await showDialog(
@@ -414,6 +520,8 @@ class _PosScreenState extends State<PosScreen> {
                   const SizedBox(height: 16),
                   TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Price (Excl. VAT)', border: OutlineInputBorder(), prefixText: 'R ', prefixIcon: Icon(Icons.payments_outlined))),
                   const SizedBox(height: 16),
+                  TextField(controller: stockCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Initial Stock Quantity', border: OutlineInputBorder(), prefixIcon: Icon(Icons.analytics_outlined))),
+                  const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
                     value: newCategory,
                     decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Category', prefixIcon: Icon(Icons.category_outlined)),
@@ -431,7 +539,7 @@ class _PosScreenState extends State<PosScreen> {
                   if (nameCtrl.text.isEmpty || priceCtrl.text.isEmpty) return;
                   Product newProd = Product(
                     id: 'PRD-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
-                    name: nameCtrl.text.trim(), price: double.tryParse(priceCtrl.text) ?? 0.0, category: newCategory, color: Colors.blueGrey.shade700, icon: Icons.local_offer,
+                    name: nameCtrl.text.trim(), price: double.tryParse(priceCtrl.text) ?? 0.0, category: newCategory, color: Colors.blueGrey.shade700, icon: Icons.local_offer, stockQuantity: double.tryParse(stockCtrl.text) ?? 0.0,
                   );
                   _updateState(() { _inventory.insert(0, newProd); });
                   _saveInventoryToDatabase();
@@ -490,8 +598,10 @@ class _PosScreenState extends State<PosScreen> {
     Customer? selectedCustomer;
     TextEditingController customerNameCtrl = TextEditingController();
     TextEditingController businessNameCtrl = TextEditingController();
+    TextEditingController notesCtrl = TextEditingController();
     TextEditingController amountTenderedCtrl = TextEditingController();
     double amountTendered = 0.0;
+    String selectedPaymentMethod = 'Cash';
     bool isNewCustomer = false;
 
     await showDialog(
@@ -571,10 +681,13 @@ class _PosScreenState extends State<PosScreen> {
                     ),
                   ],
 
+                  const SizedBox(height: 16),
+                  TextField(controller: notesCtrl, decoration: InputDecoration(labelText: 'Order Notes (Internal)', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), prefixIcon: const Icon(Icons.note_alt_outlined))),
+
                   const SizedBox(height: 24),
                   Container(
                     padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.indigo.shade50, Colors.indigo.shade100]), borderRadius: BorderRadius.circular(16)),
+                    decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.red.shade50, Colors.red.shade100]), borderRadius: BorderRadius.circular(16)),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -591,7 +704,7 @@ class _PosScreenState extends State<PosScreen> {
               OutlinedButton(
                 onPressed: () {
                   Navigator.pop(context);
-                  _finalizeOrder('Awaiting Payment', customerNameCtrl.text, businessNameCtrl.text, selectedCustomer);
+                  _finalizeOrder('Awaiting Payment', selectedPaymentMethod, customerNameCtrl.text, businessNameCtrl.text, notesCtrl.text, selectedCustomer);
                 },
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.orange.shade700, side: BorderSide(color: Colors.orange.shade300)),
                 child: const Text('Awaiting Payment'),
@@ -599,7 +712,7 @@ class _PosScreenState extends State<PosScreen> {
               ElevatedButton(
                 onPressed: () {
                   Navigator.pop(context);
-                  _finalizeOrder('Paid', customerNameCtrl.text, businessNameCtrl.text, selectedCustomer);
+                  _finalizeOrder('Paid', selectedPaymentMethod, customerNameCtrl.text, businessNameCtrl.text, notesCtrl.text, selectedCustomer);
                 },
                 style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white, elevation: 2),
                 child: const Text('Mark as Paid'),
@@ -611,7 +724,7 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  void _finalizeOrder(String status, String custName, String bizName, Customer? existingCustomer) {
+  void _finalizeOrder(String status, String method, String custName, String bizName, String notes, Customer? existingCustomer) {
     Customer? targetCustomer = existingCustomer;
 
     if (targetCustomer == null && custName.trim().isNotEmpty) {
@@ -626,6 +739,7 @@ class _PosScreenState extends State<PosScreen> {
 
     if (targetCustomer != null) {
       targetCustomer.totalSpent += _grandTotal;
+      targetCustomer.loyaltyPoints += (_grandTotal / 10).floor(); 
       if (status == 'Awaiting Payment') targetCustomer.outstandingBalance += _grandTotal;
       _saveCustomersToDatabase();
     }
@@ -637,12 +751,22 @@ class _PosScreenState extends State<PosScreen> {
       items: List.from(_cart),
       includesVat: _applyVat,
       paymentStatus: status,
+      paymentMethod: method,
       customerId: targetCustomer?.id,
       customerName: targetCustomer?.name ?? (custName.trim().isNotEmpty ? custName.trim() : null),
       businessName: targetCustomer?.businessName ?? (bizName.trim().isNotEmpty ? bizName.trim() : null),
+      notes: notes.trim().isNotEmpty ? notes.trim() : null,
     );
 
-    _updateState(() { _history.insert(0, newTransaction); });
+    _updateState(() { 
+      _history.insert(0, newTransaction);
+      for (var cartItem in _cart) {
+        var inventoryProduct = _inventory.where((p) => p.id == cartItem.product.id).firstOrNull;
+        if (inventoryProduct != null) inventoryProduct.stockQuantity -= cartItem.quantity;
+      }
+    });
+
+    _saveInventoryToDatabase();
     _saveHistoryToDatabase();
     _showSuccessDialog(newTransaction);
   }
@@ -1027,6 +1151,7 @@ class _PosScreenState extends State<PosScreen> {
     double totalRev = _history.fold(0, (sum, tx) => sum + tx.subtotal); 
     double totalExp = _expenses.fold(0, (sum, e) => sum + e.amount);
     double netProfit = totalRev - totalExp;
+    int lowStockCount = _inventory.where((p) => p.stockQuantity <= 5).length;
 
     Map<String, double> revByDay = {};
     Map<String, double> revByCategory = {'Thinners': 0, 'Oils': 0, 'Spirits': 0, 'Other': 0};
@@ -1061,7 +1186,7 @@ class _PosScreenState extends State<PosScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Dashboard', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A), letterSpacing: -1)),
+            Text('Dashboard', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
             const SizedBox(height: 8),
             Text('Financial overview and analytics.', style: TextStyle(color: Colors.grey.shade600, fontSize: isDesktop ? 16 : 14)),
             const SizedBox(height: 24),
@@ -1073,7 +1198,7 @@ class _PosScreenState extends State<PosScreen> {
                   const SizedBox(width: 20),
                   Expanded(child: _buildGradientKpiCard('Net Profit', 'R ${netProfit.toStringAsFixed(2)}', Icons.account_balance, netProfit >= 0 ? Colors.green : Colors.red)),
                   const SizedBox(width: 20),
-                  Expanded(child: _buildGradientKpiCard('Total Orders', '${_history.length}', Icons.shopping_cart, Colors.indigo)),
+                  Expanded(child: _buildGradientKpiCard('Low Stock Items', '$lowStockCount', Icons.warning_amber_rounded, lowStockCount > 0 ? Colors.orange : Colors.blueGrey)),
                 ],
               )
             else
@@ -1083,7 +1208,7 @@ class _PosScreenState extends State<PosScreen> {
                   const SizedBox(height: 12),
                   _buildGradientKpiCard('Net Profit', 'R ${netProfit.toStringAsFixed(2)}', Icons.account_balance, netProfit >= 0 ? Colors.green : Colors.red),
                   const SizedBox(height: 12),
-                  _buildGradientKpiCard('Total Orders', '${_history.length}', Icons.shopping_cart, Colors.indigo),
+                  _buildGradientKpiCard('Low Stock Items', '$lowStockCount', Icons.warning_amber_rounded, lowStockCount > 0 ? Colors.orange : Colors.blueGrey),
                 ],
               ),
             
@@ -1153,7 +1278,7 @@ class _PosScreenState extends State<PosScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Revenue Trend (7 Days)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xFF0F172A))),
+          const Text('Revenue Trend (7 Days)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xFF000000))),
           const SizedBox(height: 24),
           SizedBox(
             height: isDesktop ? 220 : 160,
@@ -1173,7 +1298,7 @@ class _PosScreenState extends State<PosScreen> {
                       width: isDesktop ? 32 : 20,
                       height: (isDesktop ? 160 : 100) * heightPct,
                       decoration: BoxDecoration(
-                        gradient: const LinearGradient(colors: [Color(0xFF818CF8), Color(0xFF4F46E5)], begin: Alignment.topCenter, end: Alignment.bottomCenter),
+                        gradient: const LinearGradient(colors: [Color(0xFFFCA5A5), Color(0xFFDC2626)], begin: Alignment.topCenter, end: Alignment.bottomCenter),
                         borderRadius: BorderRadius.circular(6),
                       ),
                     ),
@@ -1198,7 +1323,7 @@ class _PosScreenState extends State<PosScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Sales by Category', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xFF0F172A))),
+          const Text('Sales by Category', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xFF000000))),
           const SizedBox(height: 24),
           ...catData.entries.where((e) => e.value > 0).map((e) {
             double pct = e.value / totalRev;
@@ -1260,7 +1385,7 @@ class _PosScreenState extends State<PosScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Point of Sale', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A), letterSpacing: -1)),
+                  Text('Point of Sale', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
                   if (isDesktop) SizedBox(
                     width: 280,
                     child: TextField(
@@ -1309,7 +1434,7 @@ class _PosScreenState extends State<PosScreen> {
                             child: ChoiceChip(
                               label: Text(category, style: TextStyle(fontSize: isDesktop ? 14 : 12)),
                               selected: isSelected,
-                              selectedColor: const Color(0xFF0F172A),
+                              selectedColor: const Color(0xFF000000),
                               labelStyle: TextStyle(color: isSelected ? Colors.white : Colors.grey.shade700, fontWeight: isSelected ? FontWeight.bold : FontWeight.w600),
                               backgroundColor: Colors.grey.shade100,
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1328,7 +1453,7 @@ class _PosScreenState extends State<PosScreen> {
                         onPressed: _addMiscItemDialog, 
                         icon: const Icon(Icons.add_circle_outline, size: 20), 
                         label: const Text('Misc Item'),
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo.shade50, foregroundColor: Colors.indigo.shade700, elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade50, foregroundColor: Colors.red.shade700, elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                       ),
                     ),
                 ],
@@ -1342,7 +1467,7 @@ class _PosScreenState extends State<PosScreen> {
                       onPressed: _addMiscItemDialog, 
                       icon: const Icon(Icons.add_circle_outline, size: 18), 
                       label: const Text('Add Custom Item', style: TextStyle(fontSize: 13)),
-                      style: OutlinedButton.styleFrom(foregroundColor: Colors.indigo.shade700, side: BorderSide(color: Colors.indigo.shade100), padding: const EdgeInsets.symmetric(vertical: 10), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                      style: OutlinedButton.styleFrom(foregroundColor: Colors.red.shade700, side: BorderSide(color: Colors.red.shade100), padding: const EdgeInsets.symmetric(vertical: 10), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                     ),
                   ),
                 ),
@@ -1387,7 +1512,7 @@ class _PosScreenState extends State<PosScreen> {
                           child: Icon(product.icon, color: product.color, size: isDesktop ? 32 : 24),
                         ),
                         const Spacer(),
-                        Text(product.name, style: TextStyle(fontWeight: FontWeight.w800, fontSize: isDesktop ? 15 : 13, height: 1.2, color: const Color(0xFF0F172A)), maxLines: 2, overflow: TextOverflow.ellipsis),
+                        Text(product.name, style: TextStyle(fontWeight: FontWeight.w800, fontSize: isDesktop ? 15 : 13, height: 1.2, color: const Color(0xFF000000)), maxLines: 2, overflow: TextOverflow.ellipsis),
                         SizedBox(height: isDesktop ? 10 : 6),
                         Text('R ${product.price.toStringAsFixed(2)}', style: TextStyle(color: Theme.of(context).primaryColor, fontWeight: FontWeight.w900, fontSize: isDesktop ? 18 : 15)),
                       ],
@@ -1424,7 +1549,7 @@ class _PosScreenState extends State<PosScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Inventory', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A), letterSpacing: -1)),
+                      Text('Inventory', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
                       const SizedBox(height: 4),
                       Text('Manage product catalogue.', style: TextStyle(color: Colors.grey.shade600, fontSize: isDesktop ? 16 : 14)),
                     ],
@@ -1456,15 +1581,15 @@ class _PosScreenState extends State<PosScreen> {
                   child: ListTile(
                     contentPadding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 16, vertical: 8),
                     leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: p.color.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(p.icon, color: p.color, size: 24)),
-                    title: Text(p.name, style: TextStyle(fontWeight: FontWeight.w800, color: const Color(0xFF0F172A), fontSize: isDesktop ? 16 : 14)),
+                    title: Text(p.name, style: TextStyle(fontWeight: FontWeight.w800, color: const Color(0xFF000000), fontSize: isDesktop ? 16 : 14)),
                     subtitle: Padding(
                       padding: const EdgeInsets.only(top: 4.0),
-                      child: Text('ID: ${p.id}', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.w500)),
+                      child: Text('Stock: ${p.stockQuantity.toStringAsFixed(1)} units  •  ID: ${p.id}', style: TextStyle(fontSize: 12, color: p.stockQuantity < 5 ? Colors.red.shade600 : Colors.grey.shade500, fontWeight: FontWeight.w500)),
                     ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text('R ${p.price.toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: isDesktop ? 18 : 16, color: const Color(0xFF0F172A))),
+                        Text('R ${p.price.toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: isDesktop ? 18 : 16, color: const Color(0xFF000000))),
                         const SizedBox(width: 12),
                         Container(
                           decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(10)),
@@ -1472,6 +1597,15 @@ class _PosScreenState extends State<PosScreen> {
                             icon: Icon(Icons.edit, color: Colors.grey.shade600, size: 20),
                             onPressed: () => _editPriceDialog(p),
                             tooltip: 'Edit Price',
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(10)),
+                          child: IconButton(
+                            icon: Icon(Icons.delete_outline, color: Colors.red.shade400, size: 20),
+                            onPressed: () => _deleteProduct(p),
+                            tooltip: 'Delete Product',
                           ),
                         ),
                       ],
@@ -1493,6 +1627,13 @@ class _PosScreenState extends State<PosScreen> {
     double screenPadding = isDesktop ? 24.0 : 16.0;
     double titleSize = isDesktop ? 32.0 : 24.0;
 
+    List<OrderTransaction> filteredHistory = _history.where((tx) {
+      String query = _ledgerSearchController.text.toLowerCase();
+      return tx.id.toLowerCase().contains(query) ||
+             (tx.customerName?.toLowerCase().contains(query) ?? false) ||
+             (tx.businessName?.toLowerCase().contains(query) ?? false);
+    }).toList();
+
     return Container(
       color: Theme.of(context).scaffoldBackgroundColor,
       child: Column(
@@ -1501,10 +1642,45 @@ class _PosScreenState extends State<PosScreen> {
           Container(
             padding: EdgeInsets.all(screenPadding),
             width: double.infinity,
-            child: Text('Ledger', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A), letterSpacing: -1)),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Ledger', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
+                if (isDesktop) SizedBox(
+                  width: 300,
+                  child: TextField(
+                    controller: _ledgerSearchController,
+                    decoration: InputDecoration(
+                      hintText: 'Search by ID or Customer...',
+                      prefixIcon: const Icon(Icons.search),
+                      isDense: true,
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    ),
+                    onChanged: (val) => setState(() {}),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (!isDesktop) Padding(
+            padding: EdgeInsets.symmetric(horizontal: screenPadding),
+            child: TextField(
+              controller: _ledgerSearchController,
+              decoration: InputDecoration(
+                hintText: 'Search by ID or Customer...',
+                prefixIcon: const Icon(Icons.search),
+                isDense: true,
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+              ),
+              onChanged: (val) => setState(() {}),
+            ),
           ),
           Expanded(
-            child: _history.isEmpty
+            child: filteredHistory.isEmpty
                 ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -1524,9 +1700,9 @@ class _PosScreenState extends State<PosScreen> {
                       crossAxisSpacing: isDesktop ? 20 : 12,
                       mainAxisSpacing: isDesktop ? 20 : 12,
                     ),
-                    itemCount: _history.length,
+                    itemCount: filteredHistory.length,
                     itemBuilder: (context, index) {
-                      final tx = _history[index];
+                      final tx = filteredHistory[index];
                       int itemCount = tx.items.fold(0, (sum, item) => sum + item.quantity);
                       MaterialColor statusColor = tx.paymentStatus == 'Paid' ? Colors.green : Colors.orange;
                       
@@ -1555,8 +1731,8 @@ class _PosScreenState extends State<PosScreen> {
                                             children: [
                                               Container(
                                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                                decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(6)),
-                                                child: Text(tx.id, style: const TextStyle(color: Color(0xFF4F46E5), fontWeight: FontWeight.w800, fontSize: 10)),
+                                                decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(6)),
+                                                child: Text(tx.id, style: const TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.w800, fontSize: 10)),
                                               ),
                                               const SizedBox(width: 8),
                                               Container(
@@ -1581,14 +1757,14 @@ class _PosScreenState extends State<PosScreen> {
                                       ],
                                     ),
                                     const SizedBox(height: 12),
-                                    Text('R ${tx.total.toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: isDesktop ? 20 : 18, color: const Color(0xFF0F172A))),
+                                    Text('R ${tx.total.toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: isDesktop ? 20 : 18, color: const Color(0xFF000000))),
                                     const SizedBox(height: 4),
                                     Text('${tx.date.day}/${tx.date.month}/${tx.date.year} at ${tx.date.hour}:${tx.date.minute.toString().padLeft(2, '0')}', style: TextStyle(color: Colors.grey.shade500, fontSize: 12, fontWeight: FontWeight.w500)),
                                     
                                     if (tx.customerName != null || tx.businessName != null)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 6.0),
-                                        child: Text('${tx.customerName ?? ''} ${tx.businessName != null ? '(${tx.businessName})' : ''}', style: const TextStyle(color: Color(0xFF4F46E5), fontSize: 13, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        child: Text('${tx.customerName ?? ''} ${tx.businessName != null ? '(${tx.businessName})' : ''}', style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
                                       ),
 
                                     const SizedBox(height: 4),
@@ -1624,13 +1800,13 @@ class _PosScreenState extends State<PosScreen> {
                                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                             child: Container(
                                               padding: const EdgeInsets.symmetric(vertical: 8),
-                                              decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(10)),
+                                              decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(10)),
                                               child: Row(
                                                 mainAxisAlignment: MainAxisAlignment.center,
                                                 children: const [
-                                                  Icon(Icons.download, size: 16, color: Color(0xFF4F46E5)),
+                                                  Icon(Icons.download, size: 16, color: Color(0xFFDC2626)),
                                                   SizedBox(width: 4),
-                                                  Text('Docs', style: TextStyle(color: Color(0xFF4F46E5), fontSize: 12, fontWeight: FontWeight.bold))
+                                                  Text('Docs', style: TextStyle(color: Color(0xFFDC2626), fontSize: 12, fontWeight: FontWeight.bold))
                                                 ],
                                               ),
                                             ),
@@ -1685,7 +1861,7 @@ class _PosScreenState extends State<PosScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Customers', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A), letterSpacing: -1)),
+                      Text('Customers', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
                       const SizedBox(height: 4),
                       Text('Manage accounts & debt.', style: TextStyle(color: Colors.grey.shade600, fontSize: isDesktop ? 16 : 14)),
                     ],
@@ -1729,7 +1905,7 @@ class _PosScreenState extends State<PosScreen> {
                           shape: const Border(),
                           tilePadding: EdgeInsets.symmetric(horizontal: isDesktop ? 24 : 16, vertical: 8),
                           leading: CircleAvatar(backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1), radius: 20, child: Text(c.name[0].toUpperCase(), style: TextStyle(color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold, fontSize: 16))),
-                          title: Text(c.name, style: TextStyle(fontWeight: FontWeight.w800, color: const Color(0xFF0F172A), fontSize: isDesktop ? 16 : 14)),
+                          title: Text(c.name, style: TextStyle(fontWeight: FontWeight.w800, color: const Color(0xFF000000), fontSize: isDesktop ? 16 : 14)),
                           subtitle: Text(c.businessName ?? 'Individual Client', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
                           trailing: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -1773,6 +1949,16 @@ class _PosScreenState extends State<PosScreen> {
                                         ),
                                       ],
                                     ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: TextButton.icon(
+                                      onPressed: () => _deleteCustomer(c),
+                                      icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
+                                      label: const Text('Remove Customer Profile', style: TextStyle(fontSize: 12, color: Colors.red)),
+                                      style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                                    ),
                                   )
                                 ],
                               ),
@@ -1811,7 +1997,7 @@ class _PosScreenState extends State<PosScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Expenses', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A), letterSpacing: -1)),
+                      Text('Expenses', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
                       const SizedBox(height: 4),
                       Text('Recorded: R ${totalExpenses.toStringAsFixed(2)}', style: const TextStyle(color: Colors.red, fontSize: 14, fontWeight: FontWeight.bold)),
                     ],
@@ -1854,7 +2040,7 @@ class _PosScreenState extends State<PosScreen> {
                         child: ListTile(
                           contentPadding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 16, vertical: 8),
                           leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(Icons.money_off, color: Colors.red.shade400, size: 24)),
-                          title: Text(exp.description, style: TextStyle(fontWeight: FontWeight.w800, color: const Color(0xFF0F172A), fontSize: isDesktop ? 16 : 14)),
+                          title: Text(exp.description, style: TextStyle(fontWeight: FontWeight.w800, color: const Color(0xFF000000), fontSize: isDesktop ? 16 : 14)),
                           subtitle: Padding(
                             padding: const EdgeInsets.only(top: 4.0),
                             child: Text('${exp.category}  •  ${exp.date.day}/${exp.date.month}/${exp.date.year}', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.w500)),
@@ -1895,7 +2081,7 @@ class _PosScreenState extends State<PosScreen> {
           Container(
             padding: EdgeInsets.all(screenPadding),
             width: double.infinity,
-            child: Text('Reports & Analytics', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A), letterSpacing: -1)),
+            child: Text('Reports & Analytics', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
           ),
           Expanded(
             child: SingleChildScrollView(
@@ -1953,7 +2139,7 @@ class _PosScreenState extends State<PosScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: const Color(0xFF4F46E5), size: 32)),
+          Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: const Color(0xFFDC2626), size: 32)),
           const SizedBox(height: 20),
           Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
@@ -1995,7 +2181,7 @@ class _PosScreenState extends State<PosScreen> {
           Container(
             padding: EdgeInsets.all(screenPadding),
             width: double.infinity,
-            child: Text('Settings', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF0F172A), letterSpacing: -1)),
+            child: Text('Settings', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
           ),
           Expanded(
             child: SingleChildScrollView(
@@ -2008,7 +2194,7 @@ class _PosScreenState extends State<PosScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Global Configuration', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF0F172A))),
+                        const Text('Global Configuration', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF000000))),
                         const SizedBox(height: 20),
                         if (isDesktop)
                           Row(
@@ -2124,7 +2310,7 @@ class _PosScreenState extends State<PosScreen> {
     return Container(
       width: 260,
       decoration: BoxDecoration(
-        color: const Color(0xFF0F172A), 
+        color: const Color(0xFF000000), 
         boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 10, offset: const Offset(4, 0))],
       ),
       child: Column(
@@ -2137,9 +2323,9 @@ class _PosScreenState extends State<PosScreen> {
                 Container(
                   width: 40, height: 40,
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [Color(0xFF818CF8), Color(0xFF4F46E5)], begin: Alignment.topLeft, end: Alignment.bottomRight), 
+                    gradient: const LinearGradient(colors: [Color(0xFFFCA5A5), Color(0xFFDC2626)], begin: Alignment.topLeft, end: Alignment.bottomRight), 
                     borderRadius: BorderRadius.circular(12),
-                    boxShadow: [BoxShadow(color: const Color(0xFF4F46E5).withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 4))]
+                    boxShadow: [BoxShadow(color: const Color(0xFFDC2626).withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 4))]
                   ),
                   child: const Center(child: Text('S', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 22))),
                 ),
@@ -2183,7 +2369,7 @@ class _PosScreenState extends State<PosScreen> {
             decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(16)),
             child: Row(
               children: [
-                CircleAvatar(backgroundColor: const Color(0xFF4F46E5), radius: 18, child: const Text('MW', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12))),
+                CircleAvatar(backgroundColor: const Color(0xFFDC2626), radius: 18, child: const Text('MW', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12))),
                 const SizedBox(width: 12),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2215,12 +2401,12 @@ class _PosScreenState extends State<PosScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           decoration: BoxDecoration(
-            color: isActive ? const Color(0xFF4F46E5).withOpacity(0.15) : Colors.transparent,
+            color: isActive ? const Color(0xFFDC2626).withOpacity(0.15) : Colors.transparent,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Row(
             children: [
-              Icon(icon, color: isActive ? const Color(0xFF818CF8) : Colors.white54, size: 22),
+              Icon(icon, color: isActive ? const Color(0xFFFCA5A5) : Colors.white54, size: 22),
               const SizedBox(width: 16),
               Text(label, style: TextStyle(color: isActive ? Colors.white : Colors.white70, fontWeight: isActive ? FontWeight.bold : FontWeight.w500, fontSize: 15)),
             ],
@@ -2245,7 +2431,7 @@ class _PosScreenState extends State<PosScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Current Order', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
+                const Text('Current Order', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF000000))),
                 if (_cart.isNotEmpty)
                   InkWell(
                     onTap: _clearCart, 
@@ -2280,7 +2466,7 @@ class _PosScreenState extends State<PosScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(item.product.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF0F172A))),
+                                Text(item.product.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF000000))),
                                 const SizedBox(height: 4),
                                 Text('R ${item.product.price.toStringAsFixed(2)} each', style: TextStyle(color: Colors.grey.shade500, fontSize: 13, fontWeight: FontWeight.w500)),
                               ],
@@ -2305,7 +2491,7 @@ class _PosScreenState extends State<PosScreen> {
                           const SizedBox(width: 20),
                           SizedBox(
                             width: 75,
-                            child: Text('R ${item.totalPrice.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Color(0xFF0F172A)), textAlign: TextAlign.right),
+                            child: Text('R ${item.totalPrice.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Color(0xFF000000)), textAlign: TextAlign.right),
                           ),
                         ],
                       );
@@ -2350,8 +2536,8 @@ class _PosScreenState extends State<PosScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Total', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF0F172A))),
-                    Text('R ${_grandTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: Color(0xFF4F46E5), letterSpacing: -1)),
+                    const Text('Total', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF000000))),
+                    Text('R ${_grandTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: Color(0xFFDC2626), letterSpacing: -1)),
                   ],
                 ),
                 const SizedBox(height: 32),
@@ -2362,12 +2548,12 @@ class _PosScreenState extends State<PosScreen> {
                       padding: EdgeInsets.zero,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       elevation: 4,
-                      shadowColor: const Color(0xFF4F46E5).withOpacity(0.5),
+                      shadowColor: const Color(0xFFDC2626).withOpacity(0.5),
                     ),
                     onPressed: _cart.isEmpty ? null : _showCheckoutDialog,
                     child: Ink(
                       decoration: BoxDecoration(
-                        gradient: _cart.isEmpty ? null : const LinearGradient(colors: [Color(0xFF818CF8), Color(0xFF4F46E5)]),
+                        gradient: _cart.isEmpty ? null : const LinearGradient(colors: [Color(0xFFFCA5A5), Color(0xFFDC2626)]),
                         color: _cart.isEmpty ? Colors.grey.shade300 : null,
                         borderRadius: BorderRadius.circular(16),
                       ),
@@ -2384,5 +2570,18 @@ class _PosScreenState extends State<PosScreen> {
         ],
       ),
     );
+  }
+  
+  void _deleteCustomer(Customer c) {
+    setState(() {
+      _customers.remove(c);
+      // We nullify the customer reference in the ledger to preserve history 
+      // without trying to link to a profile that no longer exists.
+      for (var tx in _history) {
+        if (tx.customerId == c.id) tx.customerId = null;
+      }
+    });
+    _saveCustomersToDatabase();
+    _saveHistoryToDatabase();
   }
 }
