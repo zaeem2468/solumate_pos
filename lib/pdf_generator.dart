@@ -1,6 +1,7 @@
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'departments.dart';
 import 'models.dart';
 
 class PdfGenerator {
@@ -15,7 +16,7 @@ class PdfGenerator {
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
               pw.Center(child: pw.Text(storeName, style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold))),
-              pw.Center(child: pw.Text('Industrial Supplies')),
+              pw.Center(child: pw.Text('Hardware & Industrial Supplies')),
               pw.SizedBox(height: 10),
               pw.Divider(),
               pw.Text('Order: #${tx.id}'),
@@ -27,7 +28,7 @@ class PdfGenerator {
               ...tx.items.map((item) => pw.Row(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
-                  pw.Expanded(child: pw.Text('${item.quantity}x ${item.product.name}', style: const pw.TextStyle(fontSize: 10))),
+                  pw.Expanded(child: pw.Text('${item.qtyLabel} x ${item.product.name}', style: const pw.TextStyle(fontSize: 10))),
                   pw.Text('R ${item.totalPrice.toStringAsFixed(2)}', style: const pw.TextStyle(fontSize: 10)),
                 ],
               )),
@@ -58,117 +59,154 @@ class PdfGenerator {
   }
 
   static Future<void> printInvoice(OrderTransaction tx, String storeName, String storeAddress, String storePhone, String storeEmail, double globalVatRate) async {
+    final doc = _salesDocument(
+      storeName: storeName, storeAddress: storeAddress, storePhone: storePhone, storeEmail: storeEmail,
+      title: 'TAX INVOICE',
+      billedToLabel: 'BILLED TO:',
+      headerLines: [
+        pw.Text('Invoice #: ${tx.id}', style: const pw.TextStyle(fontSize: 12)),
+        pw.Text('Date: ${_date(tx.date)}', style: const pw.TextStyle(fontSize: 12)),
+        pw.Text('Method: ${tx.paymentMethod}', style: const pw.TextStyle(fontSize: 12)),
+        pw.Text('Status: ${tx.paymentStatus}', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: tx.paymentStatus == 'Paid' ? PdfColors.green700 : PdfColors.orange700)),
+      ],
+      customerName: tx.customerName, businessName: tx.businessName,
+      items: tx.items, subtotal: tx.subtotal, discount: tx.discount, vat: tx.vat, total: tx.total, includesVat: tx.includesVat, vatRate: globalVatRate,
+    );
+    await Printing.sharePdf(bytes: await doc.save(), filename: 'Invoice_${tx.id}.pdf');
+  }
+
+  static Future<void> printQuote(Quote quote, String storeName, String storeAddress, String storePhone, String storeEmail, double globalVatRate) async {
+    final validUntil = quote.validUntil;
+    final doc = _salesDocument(
+      storeName: storeName, storeAddress: storeAddress, storePhone: storePhone, storeEmail: storeEmail,
+      title: 'QUOTATION',
+      billedToLabel: 'QUOTED TO:',
+      headerLines: [
+        pw.Text('Quote #: ${quote.id}', style: const pw.TextStyle(fontSize: 12)),
+        pw.Text('Date: ${_date(quote.date)}', style: const pw.TextStyle(fontSize: 12)),
+        if (validUntil != null) pw.Text('Valid until: ${_date(validUntil)}', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+      ],
+      customerName: quote.customerName, businessName: quote.businessName,
+      items: quote.items, subtotal: quote.subtotal, discount: quote.discount, vat: quote.vat, total: quote.total, includesVat: quote.includesVat, vatRate: globalVatRate,
+      footnote: 'Stock is subject to availability at the time of purchase.',
+    );
+    await Printing.sharePdf(bytes: await doc.save(), filename: 'Quote_${quote.id}.pdf');
+  }
+
+  static String _date(DateTime d) => '${d.day}/${d.month}/${d.year}';
+
+  /// Builds an invoice or quote. Uses MultiPage so long trade orders flow
+  /// onto extra pages instead of being cut off.
+  static pw.Document _salesDocument({
+    required String storeName, required String storeAddress, required String storePhone, required String storeEmail,
+    required String title, required String billedToLabel, required List<pw.Widget> headerLines,
+    required String? customerName, required String? businessName,
+    required List<CartItem> items, required double subtotal, required double discount, required double vat, required double total, required bool includesVat, required double vatRate,
+    String? footnote,
+  }) {
     final doc = pw.Document();
     doc.addPage(
-      pw.Page(
+      pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
-        build: (pw.Context context) {
-          return pw.Padding(
-            padding: const pw.EdgeInsets.all(24),
+        margin: const pw.EdgeInsets.all(40),
+        build: (pw.Context context) => [
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(storeName, style: pw.TextStyle(fontSize: 32, fontWeight: pw.FontWeight.bold, color: PdfColors.red900)),
+                  pw.Text('Hardware & Industrial Supplies', style: const pw.TextStyle(fontSize: 14, color: PdfColors.grey700)),
+                  pw.Text(storeAddress, style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
+                  pw.Text(storePhone, style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
+                  pw.Text(storeEmail, style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
+                ],
+              ),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  pw.Text(title, style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: PdfColors.grey400)),
+                  pw.SizedBox(height: 8),
+                  ...headerLines,
+                ],
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 32),
+          pw.Container(
+            width: double.infinity,
+            padding: const pw.EdgeInsets.all(12),
+            decoration: pw.BoxDecoration(color: PdfColors.grey100, borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8))),
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                pw.Text(billedToLabel, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.grey600)),
+                pw.SizedBox(height: 4),
+                pw.Text(customerName ?? 'Cash Customer', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                if (businessName != null) pw.Text(businessName, style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 20),
+          pw.Container(
+            padding: const pw.EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+            decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+            child: pw.Row(
+              children: [
+                pw.Expanded(flex: 4, child: pw.Text('Description', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                pw.Expanded(flex: 1, child: pw.Text('Qty', textAlign: pw.TextAlign.center, style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                pw.Expanded(flex: 2, child: pw.Text('Unit Price', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                pw.Expanded(flex: 2, child: pw.Text('Total', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+              ],
+            ),
+          ),
+          ...items.map((item) => pw.Container(
+            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+            decoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
+            child: pw.Row(
+              children: [
+                pw.Expanded(flex: 4, child: pw.Text(item.product.name)),
+                pw.Expanded(flex: 1, child: pw.Text(item.qtyLabel, textAlign: pw.TextAlign.center)),
+                pw.Expanded(flex: 2, child: pw.Text(item.product.priceLabel, textAlign: pw.TextAlign.right)),
+                pw.Expanded(flex: 2, child: pw.Text('R ${item.totalPrice.toStringAsFixed(2)}', textAlign: pw.TextAlign.right)),
+              ],
+            ),
+          )),
+          pw.SizedBox(height: 20),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.end,
+            children: [
+              pw.Container(
+                width: 250,
+                padding: const pw.EdgeInsets.all(12),
+                decoration: pw.BoxDecoration(color: PdfColors.grey100, borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8))),
+                child: pw.Column(
                   children: [
-                    pw.Column(
-                      crossAxisAlignment: pw.CrossAxisAlignment.start,
-                      children: [
-                        pw.Text(storeName, style: pw.TextStyle(fontSize: 32, fontWeight: pw.FontWeight.bold, color: PdfColors.red900)),
-                        pw.Text('Industrial Supplies', style: const pw.TextStyle(fontSize: 14, color: PdfColors.grey700)),
-                        pw.Text(storeAddress, style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
-                        pw.Text(storePhone, style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
-                        pw.Text(storeEmail, style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
-                      ]
-                    ),
-                    pw.Column(
-                      crossAxisAlignment: pw.CrossAxisAlignment.end,
-                      children: [
-                        pw.Text('TAX INVOICE', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: PdfColors.grey400)),
-                        pw.SizedBox(height: 8),
-                        pw.Text('Invoice #: ${tx.id}', style: const pw.TextStyle(fontSize: 12)),
-                        pw.Text('Date: ${tx.date.day}/${tx.date.month}/${tx.date.year}', style: const pw.TextStyle(fontSize: 12)),
-                        pw.Text('Method: ${tx.paymentMethod}', style: const pw.TextStyle(fontSize: 12)),
-                        pw.Text('Status: ${tx.paymentStatus}', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: tx.paymentStatus == 'Paid' ? PdfColors.green700 : PdfColors.orange700)),
-                      ]
-                    )
-                  ]
+                    pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('Subtotal:'), pw.Text('R ${subtotal.toStringAsFixed(2)}')]),
+                    if (discount > 0) pw.SizedBox(height: 4),
+                    if (discount > 0) pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('Discount:', style: const pw.TextStyle(color: PdfColors.red)), pw.Text('-R ${discount.toStringAsFixed(2)}', style: const pw.TextStyle(color: PdfColors.red))]),
+                    pw.SizedBox(height: 4),
+                    pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('VAT (${includesVat ? "${(vatRate * 100).toInt()}%" : "Exempt"}):'), pw.Text('R ${vat.toStringAsFixed(2)}')]),
+                    pw.Divider(color: PdfColors.grey400),
+                    pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+                      pw.Text('Grand Total:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)),
+                      pw.Text('R ${total.toStringAsFixed(2)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16, color: PdfColors.red900)),
+                    ]),
+                  ],
                 ),
-                pw.SizedBox(height: 40),
-                
-                pw.Container(
-                  padding: const pw.EdgeInsets.all(12),
-                  decoration: pw.BoxDecoration(color: PdfColors.grey100, borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8))),
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text('BILLED TO:', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.grey600)),
-                      pw.SizedBox(height: 4),
-                      pw.Text(tx.customerName ?? 'Cash Customer', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-                      if (tx.businessName != null) pw.Text(tx.businessName!, style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
-                      if (tx.businessName == null && tx.customerName == null) pw.Text('Walk-in Client', style: const pw.TextStyle(fontSize: 12, color: PdfColors.grey700)),
-                    ]
-                  )
-                ),
-                pw.SizedBox(height: 20),
-
-                pw.Container(
-                  padding: const pw.EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                  decoration: const pw.BoxDecoration(color: PdfColors.grey200),
-                  child: pw.Row(
-                    children: [
-                      pw.Expanded(flex: 4, child: pw.Text('Description', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
-                      pw.Expanded(flex: 1, child: pw.Text('Qty', textAlign: pw.TextAlign.center, style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
-                      pw.Expanded(flex: 2, child: pw.Text('Unit Price', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
-                      pw.Expanded(flex: 2, child: pw.Text('Total', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
-                    ]
-                  )
-                ),
-                pw.SizedBox(height: 8),
-                ...tx.items.map((item) => pw.Container(
-                  padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 12),
-                  decoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
-                  child: pw.Row(
-                    children: [
-                      pw.Expanded(flex: 4, child: pw.Text(item.product.name)),
-                      pw.Expanded(flex: 1, child: pw.Text(item.quantity.toString(), textAlign: pw.TextAlign.center)),
-                      pw.Expanded(flex: 2, child: pw.Text('R ${item.product.price.toStringAsFixed(2)}', textAlign: pw.TextAlign.right)),
-                      pw.Expanded(flex: 2, child: pw.Text('R ${item.totalPrice.toStringAsFixed(2)}', textAlign: pw.TextAlign.right)),
-                    ]
-                  )
-                )),
-                pw.SizedBox(height: 20),
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.end,
-                  children: [
-                    pw.Container(
-                      width: 250,
-                      padding: const pw.EdgeInsets.all(12),
-                      decoration: pw.BoxDecoration(color: PdfColors.grey100, borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8))),
-                      child: pw.Column(
-                        children: [
-                          pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('Subtotal:'), pw.Text('R ${tx.subtotal.toStringAsFixed(2)}')]),
-                          if (tx.discount > 0) pw.SizedBox(height: 4),
-                          if (tx.discount > 0) pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('Discount:', style: const pw.TextStyle(color: PdfColors.red)), pw.Text('-R ${tx.discount.toStringAsFixed(2)}', style: const pw.TextStyle(color: PdfColors.red))]),
-                          pw.SizedBox(height: 4),
-                          pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [pw.Text('VAT (${tx.includesVat ? "${(globalVatRate*100).toInt()}%" : "Exempt"}):'), pw.Text('R ${tx.vat.toStringAsFixed(2)}')]),
-                          pw.Divider(color: PdfColors.grey400),
-                          pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-                            pw.Text('Grand Total:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)), 
-                            pw.Text('R ${tx.total.toStringAsFixed(2)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16, color: PdfColors.red900))
-                          ]),
-                        ]
-                      )
-                    )
-                  ]
-                )
-              ]
-            )
-          );
-        },
+              ),
+            ],
+          ),
+          if (footnote != null) ...[
+            pw.SizedBox(height: 16),
+            pw.Text(footnote, style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
+          ],
+        ],
       ),
     );
-    await Printing.sharePdf(bytes: await doc.save(), filename: 'Invoice_${tx.id}.pdf');
+    return doc;
   }
 
   static Future<void> printBusinessCopy(OrderTransaction tx, String storeName) async {
@@ -237,7 +275,7 @@ class PdfGenerator {
                   decoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
                   child: pw.Row(
                     children: [
-                      pw.Expanded(flex: 1, child: pw.Text(item.quantity.toString(), style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16))),
+                      pw.Expanded(flex: 1, child: pw.Text(item.qtyLabel, style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16))),
                       pw.Expanded(flex: 4, child: pw.Text(item.product.name)),
                       pw.Expanded(flex: 1, child: pw.Container(height: 14, width: 14, decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColors.grey500)))),
                     ]
@@ -339,5 +377,32 @@ class PdfGenerator {
       )
     );
     await Printing.sharePdf(bytes: await doc.save(), filename: 'Financial_Report_${DateTime.now().millisecondsSinceEpoch}.pdf');
+  }
+
+  static Future<void> printReorderList(List<Product> products, String storeName) async {
+    final sorted = [...products]..sort((a, b) => a.category == b.category ? a.name.compareTo(b.name) : a.category.compareTo(b.category));
+    final doc = pw.Document();
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(40),
+        build: (pw.Context context) => [
+          pw.Text(storeName, style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: PdfColors.red900)),
+          pw.Text('REORDER LIST', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.grey600)),
+          pw.Text('Generated on: ${_date(DateTime.now())}', style: const pw.TextStyle(fontSize: 12)),
+          pw.SizedBox(height: 20),
+          if (sorted.isEmpty) pw.Text('All items are above their reorder level.'),
+          if (sorted.isNotEmpty)
+            pw.TableHelper.fromTextArray(
+              headers: ['SKU', 'Item', 'Department', 'In stock', 'Reorder at'],
+              data: sorted.map((p) => [p.id, p.name, p.category, p.stockLabel, formatQty(p.reorderPoint)]).toList(),
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+              cellStyle: const pw.TextStyle(fontSize: 10),
+            ),
+        ],
+      ),
+    );
+    await Printing.sharePdf(bytes: await doc.save(), filename: 'Reorder_List_${DateTime.now().millisecondsSinceEpoch}.pdf');
   }
 }

@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'departments.dart';
+
 class Product {
   final String id;
-  final String name;
+  String name;
   double price;
-  final String category;
-  final Color color;
-  final IconData icon;
+  String category;
+  String unit;
   double stockQuantity;
   double reorderPoint;
   double reorderQuantity;
@@ -14,20 +15,30 @@ class Product {
   String? barcode;
   DateTime? lastRestocked;
 
-  Product({required this.id, required this.name, required this.price, required this.category, required this.color, required this.icon, this.stockQuantity = 0.0, this.reorderPoint = 5.0, this.reorderQuantity = 20.0, this.supplierId, this.barcode, this.lastRestocked});
+  Product({required this.id, required this.name, required this.price, required this.category, this.unit = 'each', this.stockQuantity = 0.0, this.reorderPoint = 5.0, this.reorderQuantity = 20.0, this.supplierId, this.barcode, this.lastRestocked});
 
   bool get isLowStock => stockQuantity <= reorderPoint;
   bool get isOutOfStock => stockQuantity <= 0;
+  Department get department => departmentFor(category);
+  bool get sellsByMeasure => isMeasuredUnit(unit);
+  String get priceLabel => unit == 'each' ? money(price) : '${money(price)} / $unit';
+  String get stockLabel => unit == 'each' ? formatQty(stockQuantity) : '${formatQty(stockQuantity)} $unit';
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'price': price, 'category': category, 'color': color.value, 'stockQuantity': stockQuantity, 'reorderPoint': reorderPoint, 'reorderQuantity': reorderQuantity, 'supplierId': supplierId, 'barcode': barcode, 'lastRestocked': lastRestocked?.toIso8601String()};
+  /// True when every word of [query] appears in the name, SKU, barcode or
+  /// department, so "tap 15" finds "Bib Tap Brass 15mm".
+  bool matches(String query) {
+    final haystack = '$name $id ${barcode ?? ''} $category'.toLowerCase();
+    return query.toLowerCase().split(RegExp(r'\s+')).where((word) => word.isNotEmpty).every(haystack.contains);
+  }
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'price': price, 'category': category, 'unit': unit, 'stockQuantity': stockQuantity, 'reorderPoint': reorderPoint, 'reorderQuantity': reorderQuantity, 'supplierId': supplierId, 'barcode': barcode, 'lastRestocked': lastRestocked?.toIso8601String()};
 
   factory Product.fromJson(Map<String, dynamic> json) => Product(
     id: json['id'],
     name: json['name'],
     price: (json['price'] as num).toDouble(),
-    category: json['category'],
-    color: Color(json['color']),
-    icon: Icons.local_offer,
+    category: normalizeCategory(json['category']),
+    unit: json['unit'] ?? 'each',
     stockQuantity: (json['stockQuantity'] as num?)?.toDouble() ?? 0.0,
     reorderPoint: (json['reorderPoint'] as num?)?.toDouble() ?? 5.0,
     reorderQuantity: (json['reorderQuantity'] as num?)?.toDouble() ?? 20.0,
@@ -39,13 +50,14 @@ class Product {
 
 class CartItem {
   final Product product;
-  int quantity;
+  double quantity;
 
   CartItem({required this.product, this.quantity = 1});
   double get totalPrice => product.price * quantity;
+  String get qtyLabel => product.unit == 'each' ? formatQty(quantity) : '${formatQty(quantity)} ${product.unit}';
 
   Map<String, dynamic> toJson() => {'product': product.toJson(), 'quantity': quantity};
-  factory CartItem.fromJson(Map<String, dynamic> json) => CartItem(product: Product.fromJson(json['product']), quantity: json['quantity']);
+  factory CartItem.fromJson(Map<String, dynamic> json) => CartItem(product: Product.fromJson(json['product']), quantity: (json['quantity'] as num).toDouble());
 }
 
 // Loyalty Tier Enum

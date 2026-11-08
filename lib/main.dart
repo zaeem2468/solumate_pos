@@ -1,9 +1,13 @@
 import 'dart:convert';
+import 'flashy.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'catalog.dart';
+import 'departments.dart';
 import 'models.dart';
 import 'pdf_generator.dart';
+import 'theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,13 +23,7 @@ class SolumatePosApp extends StatelessWidget {
     return MaterialApp(
       title: 'Solumate Business OS',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        primaryColor: const Color(0xFFDC2626), 
-        scaffoldBackgroundColor: const Color(0xFFF4F7FA), 
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFDC2626)),
-        fontFamily: 'Roboto', 
-      ),
+      theme: buildAppTheme(),
       home: const SplashScreen(),
     );
   }
@@ -62,7 +60,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     
     _animationController.forward();
 
-    Future.delayed(const Duration(seconds: 3), () {
+    Future.delayed(const Duration(milliseconds: 1800), () {
       if (mounted) {
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(
@@ -70,7 +68,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
             transitionsBuilder: (context, animation, secondaryAnimation, child) {
               return FadeTransition(opacity: animation, child: child);
             },
-            transitionDuration: const Duration(milliseconds: 800),
+            transitionDuration: const Duration(milliseconds: 300),
           ),
         );
       }
@@ -86,62 +84,38 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        width: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFFEF4444), Color(0xFFDC2626), Color(0xFF000000)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+      backgroundColor: AppColors.navyDeep,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          AnimatedBuilder(
+            animation: _animationController,
+            builder: (context, _) => CustomPaint(painter: SunburstPainter(_animationController.value)),
           ),
-        ),
-        child: FadeTransition(
-          opacity: _fadeAnimation,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ScaleTransition(
-                scale: _scaleAnimation,
-                child: Container(
-                  width: 120,
-                  height: 120,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(32),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 30, offset: const Offset(0, 15))
-                    ],
-                  ),
-                  child: const Center(
-                    child: Text('S', style: TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.w900, fontSize: 80)),
+          FadeTransition(
+            opacity: _fadeAnimation,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ScaleTransition(scale: _scaleAnimation, child: const SolumateLogo(size: 176)),
+                const SizedBox(height: 18),
+                AnimatedBuilder(
+                  animation: _slideAnimation,
+                  builder: (context, child) => Transform.translate(
+                    offset: Offset(0, _slideAnimation.value),
+                    child: Column(
+                      children: [
+                        GoldText('Solumate', style: AppText.display(68)),
+                        const SizedBox(height: 10),
+                        const Text('Paint, thinners and hardware', style: TextStyle(fontSize: 17, color: Colors.white, fontWeight: FontWeight.w500)),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 32),
-              AnimatedBuilder(
-                animation: _slideAnimation,
-                builder: (context, child) => Transform.translate(
-                  offset: Offset(0, _slideAnimation.value),
-                  child: Column(
-                    children: const [
-                      Text(
-                        'Solumate.',
-                        style: TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -1),
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        'BUSINESS OS',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white70, letterSpacing: 6),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 80),
-              const SizedBox(width: 40, height: 40, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)),
-            ],
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -184,12 +158,26 @@ class _PosScreenState extends State<PosScreen> {
   String _storeEmail = 'Ziemie786@gmail.com';
   double _globalVatRate = 0.15; 
   
-  final TextEditingController _searchController = TextEditingController(); 
+  final TextEditingController _searchController = TextEditingController();
   final TextEditingController _ledgerSearchController = TextEditingController();
-  StateSetter? _cartSheetSetState; 
+  final TextEditingController _inventorySearchController = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+  StateSetter? _cartSheetSetState;
 
-  final List<String> _categories = ['All', 'Thinners', 'Oils', 'Spirits', 'Other'];
+  String _inventoryCategory = 'All';
+  bool _inventoryLowOnly = false;
+  Quote? _loadedQuote;
+
   final List<String> _expenseCategories = ['Inventory / Stock', 'Rent', 'Utilities', 'Wages', 'Marketing', 'Maintenance', 'Other'];
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _ledgerSearchController.dispose();
+    _inventorySearchController.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -209,7 +197,15 @@ class _PosScreenState extends State<PosScreen> {
 
     final String? invData = prefs.getString('solumate_inventory');
     if (invData != null) _inventory = (jsonDecode(invData) as List).map((item) => Product.fromJson(item)).toList();
-    if (_inventory.isEmpty) { _loadDefaultInventory(); _saveInventoryToDatabase(); }
+    if (_inventory.isEmpty) {
+      _loadDefaultInventory();
+      _saveInventoryToDatabase();
+    } else if (prefs.getBool(_hardwareCatalogKey) == true) {
+      // Clears the sample hardware range that an earlier version added.
+      _inventory.removeWhere((p) => sampleHardwareIds.contains(p.id));
+      _saveInventoryToDatabase();
+      await prefs.remove(_hardwareCatalogKey);
+    }
 
     final String? histData = prefs.getString('solumate_tx_history');
     if (histData != null) _history.addAll((jsonDecode(histData) as List).map((item) => OrderTransaction.fromJson(item)).toList());
@@ -239,21 +235,10 @@ class _PosScreenState extends State<PosScreen> {
     setState(() {});
   }
 
+  static const String _hardwareCatalogKey = 'solumate_hardware_catalog_v1';
+
   void _loadDefaultInventory() {
-    _inventory = [
-      Product(id: 'LCQ-750', name: '"A" Grade Lacquer (750ml)', price: 20.50, category: 'Thinners', color: Colors.blueGrey, icon: Icons.water_drop, stockQuantity: 50),
-      Product(id: 'LCQ-750-C', name: 'Lacquer (750ml) - Case', price: 512.50, category: 'Thinners', color: Colors.indigo, icon: Icons.inventory_2, stockQuantity: 10),
-      Product(id: 'LCQ-005', name: '"A" Grade Lacquer (5L)', price: 119.00, category: 'Thinners', color: Colors.blueGrey, icon: Icons.science, stockQuantity: 20),
-      Product(id: 'ENM-750', name: 'QD Enamel Thinner (750ml)', price: 22.00, category: 'Thinners', color: Colors.teal, icon: Icons.water_drop, stockQuantity: 40),
-      Product(id: 'ENM-750-C', name: 'Enamel (750ml) - Case', price: 550.00, category: 'Thinners', color: Colors.teal.shade700, icon: Icons.inventory_2, stockQuantity: 5),
-      Product(id: 'ENM-005', name: 'QD Enamel (5L)', price: 120.00, category: 'Thinners', color: Colors.teal.shade900, icon: Icons.format_paint, stockQuantity: 15),
-      Product(id: 'TRP-750', name: 'Mineral Turpentine (750ml)', price: 25.00, category: 'Thinners', color: Colors.cyan, icon: Icons.water_drop, stockQuantity: 60),
-      Product(id: 'TRP-750-C', name: 'Turpentine (750ml) - Case', price: 625.00, category: 'Thinners', color: Colors.cyan.shade700, icon: Icons.inventory_2, stockQuantity: 8),
-      Product(id: 'LIN-OIL', name: 'Raw Linseed Oil (750ml)', price: 46.00, category: 'Oils', color: Colors.amber.shade700, icon: Icons.water_drop, stockQuantity: 25),
-      Product(id: 'LIN-OIL-C', name: 'Linseed Oil (750ml) - Case', price: 1150.00, category: 'Oils', color: Colors.amber.shade900, icon: Icons.inventory_2, stockQuantity: 4),
-      Product(id: 'MET-750', name: 'Methylated Spirits (750ml)', price: 28.00, category: 'Spirits', color: Colors.purple.shade400, icon: Icons.science, stockQuantity: 30),
-      Product(id: 'MET-750-C', name: 'Meths (750ml) - Case', price: 700.00, category: 'Spirits', color: Colors.purple.shade700, icon: Icons.inventory_2, stockQuantity: 6),
-    ];
+    _inventory = paintStarterProducts();
   }
 
   void _loadDefaultUsers() {
@@ -338,6 +323,10 @@ class _PosScreenState extends State<PosScreen> {
       _history.clear();
       _customers.clear();
       _expenses.clear();
+      _quotes.clear();
+      _stockAdjustments.clear();
+      _cart.clear();
+      _loadedQuote = null;
       _inventory.clear();
       _loadDefaultInventory();
     });
@@ -347,7 +336,7 @@ class _PosScreenState extends State<PosScreen> {
   // --- CORE STATE UPDATER ---
   void _updateState(VoidCallback fn) {
     setState(fn);
-    _cartSheetSetState?.call(fn);
+    _cartSheetSetState?.call(() {});
   }
 
   // ==========================================
@@ -355,18 +344,97 @@ class _PosScreenState extends State<PosScreen> {
   // ==========================================
 
   void _addToCart(Product product) {
+    if (product.sellsByMeasure) {
+      _measuredQuantityDialog(product);
+    } else {
+      _addQuantity(product, 1);
+    }
+  }
+
+  void _addQuantity(Product product, double quantity) {
     _updateState(() {
-      var existingItem = _cart.where((item) => item.product.id == product.id).firstOrNull;
-      if (existingItem != null) existingItem.quantity++;
-      else _cart.add(CartItem(product: product));
+      final existingItem = _cart.where((item) => item.product.id == product.id).firstOrNull;
+      if (existingItem != null) {
+        existingItem.quantity += quantity;
+      } else {
+        _cart.add(CartItem(product: product, quantity: quantity));
+      }
     });
   }
 
-  void _updateQuantity(CartItem item, int delta) {
+  void _updateQuantity(CartItem item, double delta) {
     _updateState(() {
       item.quantity += delta;
       if (item.quantity <= 0) _cart.remove(item);
     });
+  }
+
+  /// Asks how much to sell for products priced per metre, kilogram or litre.
+  Future<void> _measuredQuantityDialog(Product product) async {
+    final controller = TextEditingController();
+    final presets = switch (product.unit) {
+      'm' => const <double>[1, 2, 5, 10, 25, 50],
+      'kg' => const <double>[0.25, 0.5, 1, 2, 5, 10],
+      _ => const <double>[0.5, 1, 2, 5, 10, 20],
+    };
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          final quantity = parseNumber(controller.text) ?? 0;
+          void submit() {
+            if (quantity <= 0) return;
+            Navigator.pop(dialogContext);
+            _addQuantity(product, quantity);
+          }
+
+          return AlertDialog(
+            title: Text(product.name),
+            content: SizedBox(
+              width: 360,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${product.priceLabel}, ${product.stockLabel} in stock', style: const TextStyle(color: AppColors.muted)),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(labelText: 'Quantity', suffixText: product.unit),
+                    onChanged: (_) => setDialogState(() {}),
+                    onSubmitted: (_) => submit(),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: presets.map((preset) => ActionChip(
+                      label: Text('${formatQty(preset)} ${product.unit}'),
+                      onPressed: () => setDialogState(() => controller.text = formatQty(preset)),
+                    )).toList(),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Line total', style: TextStyle(fontWeight: FontWeight.w600)),
+                      Text(money(quantity * product.price), style: AppText.display(26)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+              ElevatedButton(onPressed: quantity > 0 ? submit : null, child: const Text('Add to order')),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _addMiscItemDialog() async {
@@ -378,7 +446,7 @@ class _PosScreenState extends State<PosScreen> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           title: const Text('Add Custom Item'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -401,7 +469,7 @@ class _PosScreenState extends State<PosScreen> {
               onPressed: () {
                 double? price = double.tryParse(priceCtrl.text);
                 if (price != null && price >= 0) {
-                  Product miscProduct = Product(id: 'MISC-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}', name: nameCtrl.text.isEmpty ? 'Misc Item' : nameCtrl.text, price: price, category: 'Other', color: Colors.indigo, icon: Icons.star_border);
+                  Product miscProduct = Product(id: 'MISC-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}', name: nameCtrl.text.isEmpty ? 'Misc Item' : nameCtrl.text, price: price, category: 'Other');
                   _updateState(() { if (saveToInventory) _inventory.insert(0, miscProduct); _addToCart(miscProduct); });
                   if (saveToInventory) _saveInventoryToDatabase();
                   Navigator.pop(context);
@@ -416,24 +484,31 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _editQuantityDialog(CartItem item) async {
-    TextEditingController controller = TextEditingController(text: item.quantity.toString());
+    final controller = TextEditingController(text: formatQty(item.quantity));
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Edit Quantity'),
-        content: TextField(controller: controller, keyboardType: TextInputType.number, decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Quantity'), autofocus: true),
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Edit quantity'),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.numberWithOptions(decimal: item.product.sellsByMeasure),
+          decoration: InputDecoration(labelText: 'Quantity', suffixText: item.product.unit),
+          autofocus: true,
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
             onPressed: () {
-              int? newQty = int.tryParse(controller.text);
+              final newQty = parseNumber(controller.text);
+              if (newQty == null || (!item.product.sellsByMeasure && newQty % 1 != 0)) return;
               _updateState(() {
-                if (newQty != null && newQty > 0) item.quantity = newQty;
-                else if (newQty != null && newQty <= 0) _cart.remove(item);
+                if (newQty > 0) {
+                  item.quantity = newQty;
+                } else {
+                  _cart.remove(item);
+                }
               });
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
             },
             child: const Text('Save'),
           ),
@@ -446,7 +521,7 @@ class _PosScreenState extends State<PosScreen> {
     bool? confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: const Text('Delete Product'),
         content: Text('Are you sure you want to delete "${product.name}"? This will remove it from the inventory list.'),
         actions: [
@@ -461,96 +536,214 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  Future<void> _editPriceDialog(Product product) async {
-    TextEditingController controller = TextEditingController(text: product.price.toStringAsFixed(2));
-    await showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('Edit Price: ${product.name}'),
-        content: TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'New Price (R)', prefixText: 'R '),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
-            onPressed: () {
-              double? newPrice = double.tryParse(controller.text);
-              if (newPrice != null && newPrice >= 0) {
-                _updateState(() {
-                  product.price = newPrice;
-                  for (var item in _cart) {
-                    if (item.product.id == product.id) item.product.price = newPrice;
-                  }
-                });
-                _saveInventoryToDatabase();
-              }
-              Navigator.pop(context);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _addNewProductDialog() async {
-    TextEditingController nameCtrl = TextEditingController();
-    TextEditingController priceCtrl = TextEditingController();
-    TextEditingController stockCtrl = TextEditingController(text: '0');
-    String newCategory = 'Other';
+  /// Adds a new product, or edits [existing] when one is passed.
+  Future<void> _productDialog([Product? existing]) async {
+    final nameCtrl = TextEditingController(text: existing?.name);
+    final skuCtrl = TextEditingController(text: existing?.id);
+    final barcodeCtrl = TextEditingController(text: existing?.barcode);
+    final priceCtrl = TextEditingController(text: existing?.price.toStringAsFixed(2));
+    final stockCtrl = TextEditingController(text: '0');
+    final reorderCtrl = TextEditingController(text: formatQty(existing?.reorderPoint ?? 5));
+    String department = existing?.category ?? departments.first.name;
+    String unit = existing?.unit ?? 'each';
+    String? error;
 
     await showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          void save() {
+            final name = nameCtrl.text.trim();
+            final price = parseNumber(priceCtrl.text);
+            final sku = skuCtrl.text.trim();
+            if (name.isEmpty || price == null || price < 0) {
+              setDialogState(() => error = 'Enter a name and a valid price.');
+              return;
+            }
+            if (existing == null && sku.isNotEmpty && _inventory.any((p) => p.id.toLowerCase() == sku.toLowerCase())) {
+              setDialogState(() => error = 'SKU $sku is already used by another item.');
+              return;
+            }
+            final barcode = barcodeCtrl.text.trim();
+            final reorderPoint = parseNumber(reorderCtrl.text) ?? 5;
+            _updateState(() {
+              if (existing != null) {
+                existing.name = name;
+                existing.price = price;
+                existing.category = department;
+                existing.unit = unit;
+                existing.barcode = barcode.isEmpty ? null : barcode;
+                existing.reorderPoint = reorderPoint;
+              } else {
+                _inventory.insert(0, Product(
+                  id: sku.isEmpty ? 'PRD-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}' : sku,
+                  name: name,
+                  price: price,
+                  category: department,
+                  unit: unit,
+                  barcode: barcode.isEmpty ? null : barcode,
+                  stockQuantity: parseNumber(stockCtrl.text) ?? 0,
+                  reorderPoint: reorderPoint,
+                ));
+              }
+            });
+            _saveInventoryToDatabase();
+            Navigator.pop(dialogContext);
+          }
+
           return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-            title: const Text('Add New Item'),
-            content: SingleChildScrollView(
+            title: Text(existing == null ? 'Add item' : 'Edit item'),
+            content: SizedBox(
+              width: 460,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(controller: nameCtrl, textCapitalization: TextCapitalization.words, decoration: const InputDecoration(labelText: 'Item name')),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: department,
+                      decoration: const InputDecoration(labelText: 'Department'),
+                      items: departments.map((d) => DropdownMenuItem(value: d.name, child: Text(d.name))).toList(),
+                      onChanged: (val) { if (val != null) setDialogState(() => department = val); },
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(child: TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Price excl. VAT', prefixText: 'R '))),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: unit,
+                            decoration: const InputDecoration(labelText: 'Sold per'),
+                            items: productUnits.map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
+                            onChanged: (val) { if (val != null) setDialogState(() => unit = val); },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(child: TextField(controller: skuCtrl, enabled: existing == null, decoration: const InputDecoration(labelText: 'SKU', hintText: 'Created for you if blank'))),
+                        const SizedBox(width: 12),
+                        Expanded(child: TextField(controller: barcodeCtrl, decoration: const InputDecoration(labelText: 'Barcode'))),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        if (existing == null) ...[
+                          Expanded(child: TextField(controller: stockCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Opening stock'))),
+                          const SizedBox(width: 12),
+                        ],
+                        Expanded(child: TextField(controller: reorderCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Reorder at'))),
+                      ],
+                    ),
+                    if (error != null) ...[
+                      const SizedBox(height: 12),
+                      Align(alignment: Alignment.centerLeft, child: Text(error!, style: const TextStyle(color: AppColors.red, fontWeight: FontWeight.w600))),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+              ElevatedButton(onPressed: save, child: Text(existing == null ? 'Add item' : 'Save changes')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// Receives or writes off stock and records why.
+  Future<void> _adjustStockDialog(Product product) async {
+    final controller = TextEditingController();
+    bool adding = true;
+    String reason = 'Restock';
+    const addReasons = ['Restock', 'Return', 'Correction'];
+    const removeReasons = ['Damage', 'Loss', 'Correction'];
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          final amount = parseNumber(controller.text) ?? 0;
+          final valid = amount > 0 && (product.sellsByMeasure || amount % 1 == 0);
+          final newQuantity = product.stockQuantity + (adding ? amount : -amount);
+
+          return AlertDialog(
+            title: Text('Adjust stock: ${product.name}'),
+            content: SizedBox(
+              width: 400,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  TextField(controller: nameCtrl, textCapitalization: TextCapitalization.words, decoration: const InputDecoration(labelText: 'Product Name', border: OutlineInputBorder(), prefixIcon: Icon(Icons.inventory_2_outlined))),
-                  const SizedBox(height: 16),
-                  TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Price (Excl. VAT)', border: OutlineInputBorder(), prefixText: 'R ', prefixIcon: Icon(Icons.payments_outlined))),
-                  const SizedBox(height: 16),
-                  TextField(controller: stockCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Initial Stock Quantity', border: OutlineInputBorder(), prefixIcon: Icon(Icons.analytics_outlined))),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<String>(
-                    value: newCategory,
-                    decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Category', prefixIcon: Icon(Icons.category_outlined)),
-                    items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                    onChanged: (val) { if (val != null) setDialogState(() => newCategory = val); },
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(value: true, label: Text('Add stock'), icon: Icon(Icons.add)),
+                      ButtonSegment(value: false, label: Text('Remove stock'), icon: Icon(Icons.remove)),
+                    ],
+                    selected: {adding},
+                    onSelectionChanged: (selection) => setDialogState(() {
+                      adding = selection.first;
+                      reason = adding ? addReasons.first : removeReasons.first;
+                    }),
                   ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    keyboardType: TextInputType.numberWithOptions(decimal: product.sellsByMeasure),
+                    decoration: InputDecoration(labelText: 'Quantity', suffixText: product.unit),
+                    onChanged: (_) => setDialogState(() {}),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    children: (adding ? addReasons : removeReasons).map((r) => ChoiceChip(
+                      label: Text(r),
+                      selected: reason == r,
+                      onSelected: (_) => setDialogState(() => reason = r),
+                    )).toList(),
+                  ),
+                  const SizedBox(height: 16),
+                  Text('Stock will change from ${formatQty(product.stockQuantity)} to ${formatQty(newQuantity)} ${product.unit}.', style: const TextStyle(color: AppColors.muted)),
                 ],
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
-                onPressed: () {
-                  if (nameCtrl.text.isEmpty || priceCtrl.text.isEmpty) return;
-                  Product newProd = Product(
-                    id: 'PRD-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
-                    name: nameCtrl.text.trim(), price: double.tryParse(priceCtrl.text) ?? 0.0, category: newCategory, color: Colors.blueGrey.shade700, icon: Icons.local_offer, stockQuantity: double.tryParse(stockCtrl.text) ?? 0.0,
-                  );
-                  _updateState(() { _inventory.insert(0, newProd); });
+                onPressed: !valid ? null : () {
+                  final now = DateTime.now();
+                  _updateState(() {
+                    _stockAdjustments.insert(0, StockAdjustment(
+                      id: 'ADJ-${now.millisecondsSinceEpoch.toString().substring(7)}',
+                      productId: product.id,
+                      productName: product.name,
+                      previousQuantity: product.stockQuantity,
+                      newQuantity: newQuantity,
+                      adjustment: newQuantity - product.stockQuantity,
+                      reason: reason,
+                      date: now,
+                    ));
+                    product.stockQuantity = newQuantity;
+                    if (reason == 'Restock') product.lastRestocked = now;
+                  });
                   _saveInventoryToDatabase();
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Product added successfully!'), backgroundColor: Colors.green));
+                  _saveStockAdjustmentsToDatabase();
+                  Navigator.pop(dialogContext);
                 },
-                child: const Text('Save Item'),
+                child: const Text('Save stock'),
               ),
             ],
           );
-        }
+        },
       ),
     );
   }
@@ -560,7 +753,7 @@ class _PosScreenState extends State<PosScreen> {
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: const Text('Add Discount (ZAR)'),
         content: TextField(controller: controller, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Discount Amount (R)', prefixText: 'R '), autofocus: true),
         actions: [
@@ -580,7 +773,7 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   void _clearCart() {
-    _updateState(() { _cart.clear(); _applyVat = true; _discountAmount = 0.0; });
+    _updateState(() { _cart.clear(); _applyVat = true; _discountAmount = 0.0; _loadedQuote = null; });
   }
 
   double get _subTotal => _cart.fold(0, (total, item) => total + item.totalPrice);
@@ -595,9 +788,9 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _showCheckoutDialog() async {
     if (_cart.isEmpty) return;
 
-    Customer? selectedCustomer;
-    TextEditingController customerNameCtrl = TextEditingController();
-    TextEditingController businessNameCtrl = TextEditingController();
+    Customer? selectedCustomer = _customers.where((c) => c.id == _loadedQuote?.customerId).firstOrNull;
+    TextEditingController customerNameCtrl = TextEditingController(text: _loadedQuote?.customerName);
+    TextEditingController businessNameCtrl = TextEditingController(text: _loadedQuote?.businessName);
     TextEditingController notesCtrl = TextEditingController();
     TextEditingController amountTenderedCtrl = TextEditingController();
     double amountTendered = 0.0;
@@ -612,7 +805,7 @@ class _PosScreenState extends State<PosScreen> {
           double changeDue = amountTendered - _grandTotal;
           
           return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             title: const Text('Checkout', style: TextStyle(fontWeight: FontWeight.bold)),
             content: SingleChildScrollView(
               child: Column(
@@ -661,12 +854,23 @@ class _PosScreenState extends State<PosScreen> {
                   const SizedBox(height: 24),
                   const Text('Payment', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
                   const SizedBox(height: 8),
-                  TextField(
-                    controller: amountTenderedCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), 
-                    decoration: InputDecoration(labelText: 'Amount Tendered (Cash)', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), prefixText: 'R '),
-                    onChanged: (val) { setCheckoutState(() { amountTendered = double.tryParse(val) ?? 0.0; }); },
+                  Wrap(
+                    spacing: 8,
+                    children: ['Cash', 'Card', 'EFT'].map((method) => ChoiceChip(
+                      label: Text(method),
+                      selected: selectedPaymentMethod == method,
+                      onSelected: (_) => setCheckoutState(() => selectedPaymentMethod = method),
+                    )).toList(),
                   ),
-                  if (amountTendered > 0) ...[
+                  if (selectedPaymentMethod == 'Cash') ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: amountTenderedCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(labelText: 'Amount tendered', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), prefixText: 'R '),
+                      onChanged: (val) { setCheckoutState(() { amountTendered = parseNumber(val) ?? 0.0; }); },
+                    ),
+                  ],
+                  if (selectedPaymentMethod == 'Cash' && amountTendered > 0) ...[
                     const SizedBox(height: 12),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -687,12 +891,12 @@ class _PosScreenState extends State<PosScreen> {
                   const SizedBox(height: 24),
                   Container(
                     padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.red.shade50, Colors.red.shade100]), borderRadius: BorderRadius.circular(16)),
+                    decoration: BoxDecoration(color: AppColors.ground, borderRadius: BorderRadius.circular(8)),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('Amount Due:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                        Text('R ${_grandTotal.toStringAsFixed(2)}', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Theme.of(context).primaryColor)),
+                        const Text('Amount due', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        Text(money(_grandTotal), style: AppText.display(26)),
                       ],
                     ),
                   ),
@@ -748,7 +952,8 @@ class _PosScreenState extends State<PosScreen> {
       id: 'TXN-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
       date: DateTime.now(),
       subtotal: _subTotal, discount: _discountAmount, vat: _vatAmount, total: _grandTotal,
-      items: List.from(_cart),
+      // Copies the products so later price edits can't change this sale.
+      items: _cart.map((item) => CartItem(product: Product.fromJson(item.product.toJson()), quantity: item.quantity)).toList(),
       includesVat: _applyVat,
       paymentStatus: status,
       paymentMethod: method,
@@ -766,6 +971,13 @@ class _PosScreenState extends State<PosScreen> {
       }
     });
 
+    final quote = _loadedQuote;
+    if (quote != null) {
+      quote.status = 'Converted';
+      quote.convertedToTransactionId = newTransaction.id;
+      _saveQuotesToDatabase();
+    }
+
     _saveInventoryToDatabase();
     _saveHistoryToDatabase();
     _showSuccessDialog(newTransaction);
@@ -776,7 +988,7 @@ class _PosScreenState extends State<PosScreen> {
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: Row(
           children: [
             Icon(tx.paymentStatus == 'Paid' ? Icons.check_circle : Icons.schedule, color: tx.paymentStatus == 'Paid' ? Colors.green : Colors.orange, size: 32),
@@ -800,7 +1012,7 @@ class _PosScreenState extends State<PosScreen> {
     bool? confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: const Text('Delete Transaction'),
         content: Text('Are you sure you want to permanently delete order #${tx.id}? This cannot be undone.'),
         actions: [
@@ -840,7 +1052,7 @@ class _PosScreenState extends State<PosScreen> {
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: Text(existing == null ? 'Add Customer' : 'Edit Customer'),
         content: SingleChildScrollView(
           child: Column(
@@ -932,7 +1144,7 @@ class _PosScreenState extends State<PosScreen> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           title: const Text('Record Expense'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1001,26 +1213,23 @@ class _PosScreenState extends State<PosScreen> {
   // ==========================================
   @override
   Widget build(BuildContext context) {
-    bool isDesktop = MediaQuery.of(context).size.width > 850;
+    bool isDesktop = MediaQuery.of(context).size.width > 980;
 
     return Scaffold(
       key: _scaffoldKey,
       drawer: !isDesktop ? Drawer(
-        child: Container(
-          color: const Color(0xFF0F172A),
-          child: SafeArea(
-            child: Column(
-              children: [
-                const SizedBox(height: 30),
-                const Text('Solumate.', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -0.5)),
-                const SizedBox(height: 30),
-                _buildSidebarItem(Icons.people, 'Customers (CRM)', 4),
-                _buildSidebarItem(Icons.account_balance_wallet, 'Expenses', 5),
-                _buildSidebarItem(Icons.analytics, 'Reports', 6),
-                const Divider(color: Colors.white24, indent: 20, endIndent: 20),
-                _buildSidebarItem(Icons.settings, 'Settings', 7),
-              ],
-            ),
+        backgroundColor: AppColors.navy,
+        child: SafeArea(
+          child: Column(
+            children: [
+              _buildBrandBlock(),
+              _buildSidebarItem(Icons.request_quote, 'Quotes', 8),
+              _buildSidebarItem(Icons.people, 'Customers', 4),
+              _buildSidebarItem(Icons.account_balance_wallet, 'Expenses', 5),
+              _buildSidebarItem(Icons.analytics, 'Reports', 6),
+              const Divider(color: Colors.white24, indent: 20, endIndent: 20),
+              _buildSidebarItem(Icons.settings, 'Settings', 7),
+            ],
           ),
         ),
       ) : null,
@@ -1071,22 +1280,22 @@ class _PosScreenState extends State<PosScreen> {
       ),
       bottomNavigationBar: !isDesktop
           ? NavigationBar(
-              selectedIndex: _currentMenuIndex > 3 ? 3 : _currentMenuIndex, 
+              selectedIndex: const {0: 0, 1: 1, 3: 2, 2: 3}[_currentMenuIndex] ?? 4,
               onDestinationSelected: (index) {
-                if (index == 3) {
+                if (index == 4) {
                   _scaffoldKey.currentState?.openDrawer();
                 } else {
-                  setState(() => _currentMenuIndex = index);
+                  setState(() => _currentMenuIndex = const [0, 1, 3, 2][index]);
                 }
               },
-              backgroundColor: Colors.white,
-              elevation: 20,
-              indicatorColor: const Color(0xFFEEF2FF),
+              backgroundColor: AppColors.surface,
+              indicatorColor: AppColors.yellow,
               destinations: const [
-                NavigationDestination(icon: Icon(Icons.bar_chart_outlined), selectedIcon: Icon(Icons.bar_chart, color: Color(0xFF4F46E5)), label: 'Dashboard'),
-                NavigationDestination(icon: Icon(Icons.point_of_sale_outlined), selectedIcon: Icon(Icons.point_of_sale, color: Color(0xFF4F46E5)), label: 'POS'),
-                NavigationDestination(icon: Icon(Icons.receipt_long_outlined), selectedIcon: Icon(Icons.receipt_long, color: Color(0xFF4F46E5)), label: 'Ledger'),
-                NavigationDestination(icon: Icon(Icons.menu), label: 'Menu'),
+                NavigationDestination(icon: Icon(Icons.bar_chart_outlined), selectedIcon: Icon(Icons.bar_chart), label: 'Home'),
+                NavigationDestination(icon: Icon(Icons.point_of_sale_outlined), selectedIcon: Icon(Icons.point_of_sale), label: 'Sell'),
+                NavigationDestination(icon: Icon(Icons.inventory_2_outlined), selectedIcon: Icon(Icons.inventory_2), label: 'Stock'),
+                NavigationDestination(icon: Icon(Icons.receipt_long_outlined), selectedIcon: Icon(Icons.receipt_long), label: 'Sales'),
+                NavigationDestination(icon: Icon(Icons.menu), label: 'More'),
               ],
             )
           : null,
@@ -1106,7 +1315,7 @@ class _PosScreenState extends State<PosScreen> {
                         child: Column(
                           children: [
                             Center(child: Container(margin: const EdgeInsets.only(top: 12, bottom: 8), width: 50, height: 6, decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(10)))),
-                            Expanded(child: _buildCartPanel()),
+                            Expanded(child: _buildCartPanel(inSheet: true)),
                           ],
                         )
                       );
@@ -1137,6 +1346,7 @@ class _PosScreenState extends State<PosScreen> {
       case 5: return _buildExpensesView(isDesktop);
       case 6: return _buildReportsView(isDesktop);
       case 7: return _buildSettingsView(isDesktop);
+      case 8: return _buildQuotesView(isDesktop);
       default: return _buildPosView(isDesktop);
     }
   }
@@ -1145,165 +1355,179 @@ class _PosScreenState extends State<PosScreen> {
   // DASHBOARD VIEW
   // ==========================================
   Widget _buildDashboardView(bool isDesktop) {
-    double screenPadding = isDesktop ? 24.0 : 16.0;
-    double titleSize = isDesktop ? 32.0 : 24.0;
-    
-    double totalRev = _history.fold(0, (sum, tx) => sum + tx.subtotal); 
-    double totalExp = _expenses.fold(0, (sum, e) => sum + e.amount);
-    double netProfit = totalRev - totalExp;
-    int lowStockCount = _inventory.where((p) => p.stockQuantity <= 5).length;
+    final pad = isDesktop ? 24.0 : 16.0;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
 
-    Map<String, double> revByDay = {};
-    Map<String, double> revByCategory = {'Thinners': 0, 'Oils': 0, 'Spirits': 0, 'Other': 0};
-    
-    DateTime now = DateTime.now();
+    final todaysSales = _history.where((tx) => !tx.date.isBefore(today)).toList();
+    final salesToday = todaysSales.fold(0.0, (sum, tx) => sum + tx.subtotal);
+    final totalRev = _history.fold(0.0, (sum, tx) => sum + tx.subtotal);
+    final totalExp = _expenses.fold(0.0, (sum, e) => sum + e.amount);
+    final netProfit = totalRev - totalExp;
+    final owed = _customers.fold(0.0, (sum, c) => sum + c.outstandingBalance);
+    final lowStock = _inventory.where((p) => p.isLowStock).toList()..sort((a, b) => a.stockQuantity.compareTo(b.stockQuantity));
+
+    final Map<DateTime, double> revByDay = {};
     for (int i = 6; i >= 0; i--) {
-      DateTime d = now.subtract(Duration(days: i));
-      String dayLabel = '${d.day}/${d.month}';
-      revByDay[dayLabel] = 0;
+      revByDay[DateTime(now.year, now.month, now.day - i)] = 0;
+    }
+    final Map<String, double> revByDepartment = {};
+    for (final tx in _history) {
+      final day = DateTime(tx.date.year, tx.date.month, tx.date.day);
+      if (revByDay.containsKey(day)) revByDay[day] = revByDay[day]! + tx.subtotal;
+      for (final item in tx.items) {
+        revByDepartment[item.product.category] = (revByDepartment[item.product.category] ?? 0) + item.totalPrice;
+      }
     }
 
-    for (var tx in _history) {
-      String dayLabel = '${tx.date.day}/${tx.date.month}';
-      if (revByDay.containsKey(dayLabel)) {
-        revByDay[dayLabel] = revByDay[dayLabel]! + tx.subtotal;
-      }
-      for (var item in tx.items) {
-        String cat = item.product.category;
-        if (revByCategory.containsKey(cat)) {
-          revByCategory[cat] = revByCategory[cat]! + (item.product.price * item.quantity);
-        } else {
-          revByCategory['Other'] = (revByCategory['Other'] ?? 0) + (item.product.price * item.quantity);
-        }
-      }
-    }
+    final stats = <Widget>[
+      _statBlock('Net profit', money(netProfit), Icons.account_balance, netProfit >= 0 ? AppColors.ok : AppColors.red),
+      _statBlock('Owed by customers', money(owed), Icons.schedule, owed > 0 ? AppColors.warn : AppColors.muted, onTap: () => setState(() => _currentMenuIndex = 4)),
+      _statBlock('Items to reorder', '${lowStock.length}', Icons.warning_amber_rounded, lowStock.isNotEmpty ? AppColors.warn : AppColors.muted, onTap: () => setState(() {
+        _inventoryLowOnly = true;
+        _inventoryCategory = 'All';
+        _currentMenuIndex = 3;
+      })),
+    ];
 
     return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      child: Container(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        padding: EdgeInsets.all(screenPadding),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Dashboard', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
-            const SizedBox(height: 8),
-            Text('Financial overview and analytics.', style: TextStyle(color: Colors.grey.shade600, fontSize: isDesktop ? 16 : 14)),
-            const SizedBox(height: 24),
-            
-            if (isDesktop)
-              Row(
-                children: [
-                  Expanded(child: _buildGradientKpiCard('Gross Revenue', 'R ${totalRev.toStringAsFixed(2)}', Icons.payments, Colors.teal)),
-                  const SizedBox(width: 20),
-                  Expanded(child: _buildGradientKpiCard('Net Profit', 'R ${netProfit.toStringAsFixed(2)}', Icons.account_balance, netProfit >= 0 ? Colors.green : Colors.red)),
-                  const SizedBox(width: 20),
-                  Expanded(child: _buildGradientKpiCard('Low Stock Items', '$lowStockCount', Icons.warning_amber_rounded, lowStockCount > 0 ? Colors.orange : Colors.blueGrey)),
-                ],
-              )
-            else
-              Column(
-                children: [
-                  _buildGradientKpiCard('Gross Revenue', 'R ${totalRev.toStringAsFixed(2)}', Icons.payments, Colors.teal),
-                  const SizedBox(height: 12),
-                  _buildGradientKpiCard('Net Profit', 'R ${netProfit.toStringAsFixed(2)}', Icons.account_balance, netProfit >= 0 ? Colors.green : Colors.red),
-                  const SizedBox(height: 12),
-                  _buildGradientKpiCard('Low Stock Items', '$lowStockCount', Icons.warning_amber_rounded, lowStockCount > 0 ? Colors.orange : Colors.blueGrey),
-                ],
-              ),
-            
-            const SizedBox(height: 24),
-            
-            if (isDesktop)
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(flex: 3, child: _buildRevenueBarChart(revByDay, isDesktop)),
-                  const SizedBox(width: 24),
-                  Expanded(flex: 2, child: _buildCategorySalesChart(revByCategory, totalRev, isDesktop)),
-                ],
-              )
-            else
-              Column(
-                children: [
-                  _buildRevenueBarChart(revByDay, isDesktop),
-                  const SizedBox(height: 16),
-                  _buildCategorySalesChart(revByCategory, totalRev, isDesktop),
-                ],
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGradientKpiCard(String title, String value, IconData icon, MaterialColor color) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: [color.shade400, color.shade700], begin: Alignment.topLeft, end: Alignment.bottomRight),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: color.withOpacity(0.35), blurRadius: 15, offset: const Offset(0, 8))],
-      ),
-      child: Row(
+      padding: EdgeInsets.all(pad),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(16)),
-            child: Icon(icon, color: Colors.white, size: 28),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
+          _salesTodayBanner(salesToday, todaysSales.length, isDesktop),
+          const SizedBox(height: 12),
+          if (isDesktop)
+            Row(children: [for (int i = 0; i < stats.length; i++) ...[if (i > 0) const SizedBox(width: 12), Expanded(child: stats[i])]])
+          else
+            Column(children: [for (final stat in stats) Padding(padding: const EdgeInsets.only(bottom: 8), child: stat)]),
+          const SizedBox(height: 12),
+          if (isDesktop)
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -0.5)),
+                Expanded(flex: 3, child: _buildRevenueBarChart(revByDay, isDesktop)),
+                const SizedBox(width: 12),
+                Expanded(flex: 2, child: _buildDepartmentSalesChart(revByDepartment)),
               ],
-            ),
-          ),
+            )
+          else ...[
+            _buildRevenueBarChart(revByDay, isDesktop),
+            const SizedBox(height: 12),
+            _buildDepartmentSalesChart(revByDepartment),
+          ],
+          const SizedBox(height: 12),
+          _buildReorderCard(lowStock),
         ],
       ),
     );
   }
 
-  Widget _buildRevenueBarChart(Map<String, double> revByDay, bool isDesktop) {
-    double maxRev = revByDay.values.fold(0.0, (max, v) => v > max ? v : max);
-    if (maxRev == 0) maxRev = 1; 
+  Widget _salesTodayBanner(double salesToday, int saleCount, bool isDesktop) {
+    final summary = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Sales today, excl. VAT', style: TextStyle(color: Colors.white70, fontSize: 14)),
+        const SizedBox(height: 6),
+        FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: GoldText(money(salesToday), style: AppText.display(isDesktop ? 58 : 46))),
+        const SizedBox(height: 4),
+        Text(saleCount == 1 ? '1 sale so far' : '$saleCount sales so far', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
+      ],
+    );
+    final outlineStyle = OutlinedButton.styleFrom(foregroundColor: Colors.white, backgroundColor: const Color(0x22FFFFFF), side: const BorderSide(color: Colors.white38), padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16));
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        ElevatedButton.icon(
+          onPressed: () => setState(() => _currentMenuIndex = 1),
+          icon: const Icon(Icons.point_of_sale, size: 18),
+          label: const Text('New sale'),
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.yellow, foregroundColor: AppColors.navy, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16)),
+        ),
+        OutlinedButton.icon(onPressed: () => _productDialog(), icon: const Icon(Icons.add, size: 18), label: const Text('Add item'), style: outlineStyle),
+        OutlinedButton.icon(onPressed: _addExpenseDialog, icon: const Icon(Icons.receipt, size: 18), label: const Text('Record expense'), style: outlineStyle),
+      ],
+    );
 
     return Container(
-      padding: EdgeInsets.all(isDesktop ? 24 : 16),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: Colors.grey.shade200.withOpacity(0.5), blurRadius: 15, offset: const Offset(0, 6))]),
+      padding: EdgeInsets.all(isDesktop ? 26 : 18),
+      decoration: BoxDecoration(
+        gradient: AppGradients.banner,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [BoxShadow(color: AppColors.red.withValues(alpha: 0.35), blurRadius: 22, offset: const Offset(0, 10))],
+      ),
+      child: isDesktop
+          ? Row(children: [Expanded(child: summary), Flexible(child: actions)])
+          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [summary, const SizedBox(height: 16), actions]),
+    );
+  }
+
+  Widget _statBlock(String title, String value, IconData icon, Color color, {VoidCallback? onTap}) {
+    return Material(
+      color: AppColors.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: AppColors.line)),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Icon(icon, color: color, size: 26),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontSize: 13, color: AppColors.muted, fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 2),
+                    Text(value, style: AppText.display(24, color: color == AppColors.muted ? AppColors.ink : color)),
+                  ],
+                ),
+              ),
+              if (onTap != null) const Icon(Icons.chevron_right, color: AppColors.muted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  BoxDecoration get _panelDecoration => BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.line));
+
+  Widget _buildRevenueBarChart(Map<DateTime, double> revByDay, bool isDesktop) {
+    double maxRev = revByDay.values.fold(0.0, (max, v) => v > max ? v : max);
+    if (maxRev == 0) maxRev = 1;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: _panelDecoration,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Revenue Trend (7 Days)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xFF000000))),
-          const SizedBox(height: 24),
+          const Text('Sales, last 7 days', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 16),
           SizedBox(
             height: isDesktop ? 220 : 160,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: revByDay.entries.map((e) {
-                double heightPct = e.value / maxRev;
+                final isToday = e.key == revByDay.keys.last;
                 return Column(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    if (e.value > 0) 
-                      Text(e.value >= 1000 ? '${(e.value/1000).toStringAsFixed(1)}k' : e.value.toStringAsFixed(0), 
-                           style: TextStyle(fontSize: 10, color: Colors.grey.shade600, fontWeight: FontWeight.bold)),
+                    if (e.value > 0)
+                      Text(e.value >= 1000 ? '${(e.value / 1000).toStringAsFixed(1)}k' : e.value.toStringAsFixed(0), style: const TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600)),
                     const SizedBox(height: 6),
                     Container(
-                      width: isDesktop ? 32 : 20,
-                      height: (isDesktop ? 160 : 100) * heightPct,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(colors: [Color(0xFFFCA5A5), Color(0xFFDC2626)], begin: Alignment.topCenter, end: Alignment.bottomCenter),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
+                      width: isDesktop ? 34 : 22,
+                      height: (isDesktop ? 160 : 100) * (e.value / maxRev),
+                      decoration: BoxDecoration(color: isToday ? AppColors.red : AppColors.navy, borderRadius: BorderRadius.circular(3)),
                     ),
                     const SizedBox(height: 8),
-                    Text(e.key, style: TextStyle(fontSize: 11, color: Colors.grey.shade500, fontWeight: FontWeight.w600)),
+                    Text('${e.key.day}/${e.key.month}', style: const TextStyle(fontSize: 11, color: AppColors.muted)),
                   ],
                 );
               }).toList(),
@@ -1314,47 +1538,69 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  Widget _buildCategorySalesChart(Map<String, double> catData, double totalRev, bool isDesktop) {
-    if (totalRev == 0) totalRev = 1; 
-    
+  Widget _buildDepartmentSalesChart(Map<String, double> revByDepartment) {
+    final entries = revByDepartment.entries.where((e) => e.value > 0).toList()..sort((a, b) => b.value.compareTo(a.value));
+    final total = entries.fold(0.0, (sum, e) => sum + e.value);
+
     return Container(
-      padding: EdgeInsets.all(isDesktop ? 24 : 16),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: Colors.grey.shade200.withOpacity(0.5), blurRadius: 15, offset: const Offset(0, 6))]),
+      padding: const EdgeInsets.all(18),
+      decoration: _panelDecoration,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Sales by Category', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Color(0xFF000000))),
-          const SizedBox(height: 24),
-          ...catData.entries.where((e) => e.value > 0).map((e) {
-            double pct = e.value / totalRev;
-            Color barColor = e.key == 'Thinners' ? Colors.teal : (e.key == 'Oils' ? Colors.amber.shade500 : (e.key == 'Spirits' ? Colors.purple.shade400 : Colors.blueGrey));
-            
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(e.key, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                      Text('R ${e.value.toStringAsFixed(2)}', style: TextStyle(color: Colors.grey.shade600, fontSize: 13, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: LinearProgressIndicator(
-                      value: pct,
-                      minHeight: 10,
-                      backgroundColor: Colors.grey.shade100,
-                      color: barColor, 
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }),
+          const Text('Sales by department', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 16),
+          if (entries.isEmpty)
+            const Text('Each department shows here after its first sale.', style: TextStyle(color: AppColors.muted)),
+          ...entries.map((e) => Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(e.key, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                    Text(money(e.value), style: const TextStyle(color: AppColors.muted, fontSize: 13, fontWeight: FontWeight.w600)),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(value: e.value / total, minHeight: 8, backgroundColor: AppColors.ground, color: departmentFor(e.key).color),
+                ),
+              ],
+            ),
+          )),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReorderCard(List<Product> lowStock) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: _panelDecoration,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Reorder soon', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          if (lowStock.isEmpty)
+            const Text('All items are above their reorder level.', style: TextStyle(color: AppColors.muted)),
+          ...lowStock.take(6).map((p) => Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Icon(p.department.icon, color: p.department.color, size: 20),
+                const SizedBox(width: 12),
+                Expanded(child: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w500))),
+                Text('${p.stockLabel} left', style: TextStyle(color: p.isOutOfStock ? AppColors.red : AppColors.warn, fontWeight: FontWeight.w600, fontSize: 13)),
+                const SizedBox(width: 8),
+                TextButton(onPressed: () => _adjustStockDialog(p), child: const Text('Restock')),
+              ],
+            ),
+          )),
         ],
       ),
     );
@@ -1363,167 +1609,235 @@ class _PosScreenState extends State<PosScreen> {
   // ==========================================
   // POS VIEW
   // ==========================================
-  Widget _buildPosView(bool isDesktop) {
-    double screenPadding = isDesktop ? 24.0 : 16.0;
-    double titleSize = isDesktop ? 32.0 : 24.0;
+  void _handleSearchSubmit(String raw) {
+    final query = raw.trim();
+    if (query.isEmpty) return;
+    final lower = query.toLowerCase();
+    Product? hit = _inventory.where((p) => p.barcode?.toLowerCase() == lower || p.id.toLowerCase() == lower).firstOrNull;
+    if (hit == null) {
+      final matches = _inventory.where((p) => p.matches(query)).toList();
+      if (matches.length == 1) hit = matches.first;
+    }
+    if (hit != null) {
+      _searchController.clear();
+      setState(() {});
+      _addToCart(hit);
+    }
+    _searchFocus.requestFocus();
+  }
 
-    List<Product> displayedProducts = _inventory.where((p) {
-      bool matchesCategory = _selectedCategory == 'All' || p.category == _selectedCategory;
-      bool matchesSearch = p.name.toLowerCase().contains(_searchController.text.toLowerCase());
-      return matchesCategory && matchesSearch;
-    }).toList();
+  Widget _buildPosView(bool isDesktop) {
+    final pad = isDesktop ? 20.0 : 12.0;
+    final query = _searchController.text;
+    final displayedProducts = _inventory.where((p) => (_selectedCategory == 'All' || p.category == _selectedCategory) && p.matches(query)).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          padding: EdgeInsets.fromLTRB(screenPadding, screenPadding, screenPadding, 16),
-          decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4))]),
+          color: AppColors.surface,
+          padding: EdgeInsets.fromLTRB(pad, pad, pad, 12),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('Point of Sale', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
-                  if (isDesktop) SizedBox(
-                    width: 280,
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: InputDecoration(
-                        hintText: 'Search inventory...',
-                        prefixIcon: const Icon(Icons.search, size: 22, color: Colors.grey),
-                        isDense: true,
-                        filled: true,
-                        fillColor: Colors.grey.shade100,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-                      ),
-                      onChanged: (val) => setState((){}),
-                    ),
-                  )
-                ],
-              ),
-              if (!isDesktop) ...[
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    hintText: 'Search inventory...',
-                    prefixIcon: const Icon(Icons.search, size: 20, color: Colors.grey),
-                    isDense: true,
-                    filled: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                    fillColor: Colors.grey.shade100,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                  ),
-                  onChanged: (val) => setState((){}),
-                ),
-              ],
-              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      physics: const BouncingScrollPhysics(),
-                      child: Row(
-                        children: _categories.map((category) {
-                          bool isSelected = _selectedCategory == category;
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 8.0),
-                            child: ChoiceChip(
-                              label: Text(category, style: TextStyle(fontSize: isDesktop ? 14 : 12)),
-                              selected: isSelected,
-                              selectedColor: const Color(0xFF000000),
-                              labelStyle: TextStyle(color: isSelected ? Colors.white : Colors.grey.shade700, fontWeight: isSelected ? FontWeight.bold : FontWeight.w600),
-                              backgroundColor: Colors.grey.shade100,
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Colors.transparent)),
-                              onSelected: (_) => setState(() => _selectedCategory = category),
-                            ),
-                          );
-                        }).toList(),
+                    child: TextField(
+                      controller: _searchController,
+                      focusNode: _searchFocus,
+                      decoration: InputDecoration(
+                        hintText: isDesktop ? 'Search name, SKU or scan a barcode' : 'Search or scan',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: query.isEmpty ? null : IconButton(tooltip: 'Clear search', icon: const Icon(Icons.close), onPressed: () { _searchController.clear(); setState(() {}); }),
+                        isDense: true,
                       ),
+                      onChanged: (_) => setState(() {}),
+                      onSubmitted: _handleSearchSubmit,
                     ),
                   ),
-                  if (isDesktop)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 16.0),
-                      child: ElevatedButton.icon(
-                        onPressed: _addMiscItemDialog, 
-                        icon: const Icon(Icons.add_circle_outline, size: 20), 
-                        label: const Text('Misc Item'),
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade50, foregroundColor: Colors.red.shade700, elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                      ),
-                    ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _addMiscItemDialog,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: Text(isDesktop ? 'Custom item' : 'Custom'),
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14)),
+                  ),
                 ],
               ),
-              if (!isDesktop)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12.0),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _addMiscItemDialog, 
-                      icon: const Icon(Icons.add_circle_outline, size: 18), 
-                      label: const Text('Add Custom Item', style: TextStyle(fontSize: 13)),
-                      style: OutlinedButton.styleFrom(foregroundColor: Colors.red.shade700, side: BorderSide(color: Colors.red.shade100), padding: const EdgeInsets.symmetric(vertical: 10), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                    ),
-                  ),
-                ),
+              const SizedBox(height: 12),
+              _departmentBar(_selectedCategory, (name) => setState(() => _selectedCategory = name)),
             ],
           ),
         ),
         Expanded(
-          child: GridView.builder(
-            padding: EdgeInsets.all(screenPadding),
-            physics: const BouncingScrollPhysics(),
-            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 220,
-              childAspectRatio: isDesktop ? 0.85 : 0.72,
-              crossAxisSpacing: isDesktop ? 20 : 12,
-              mainAxisSpacing: isDesktop ? 20 : 12,
+          child: displayedProducts.isEmpty
+              ? (query.isEmpty
+                  ? _emptyState(Icons.add_business, 'No items in this department yet.', actionLabel: 'Add item', onAction: () => _productDialog())
+                  : _emptyState(Icons.search_off, 'No items match "$query".', actionLabel: 'Sell as custom item', onAction: _addMiscItemDialog))
+              : GridView.builder(
+                  padding: EdgeInsets.fromLTRB(pad, pad, pad, isDesktop ? pad : 88),
+                  gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: isDesktop ? 210 : 180, mainAxisExtent: 152, crossAxisSpacing: 10, mainAxisSpacing: 10),
+                  itemCount: displayedProducts.length,
+                  itemBuilder: (context, index) => _productTag(displayedProducts[index]),
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// Horizontal row of aisle signs, one per department.
+  Widget _departmentBar(String selected, ValueChanged<String> onSelect) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          _aisleSign('All', Icons.apps, AppColors.navy, selected == 'All', () => onSelect('All')),
+          ...departments.map((d) => _aisleSign(d.name, d.icon, d.color, selected == d.name, () => onSelect(d.name))),
+        ],
+      ),
+    );
+  }
+
+  Widget _aisleSign(String name, IconData icon, Color color, bool isSelected, VoidCallback onTap) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 4, 8, 10),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        decoration: BoxDecoration(
+          gradient: isSelected ? AppGradients.forColor(color) : null,
+          color: isSelected ? null : AppColors.surface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isSelected ? Colors.transparent : AppColors.line),
+          boxShadow: isSelected ? [BoxShadow(color: color.withValues(alpha: 0.55), blurRadius: 12, offset: const Offset(0, 4))] : null,
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          borderRadius: BorderRadius.circular(8),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              child: Row(
+                children: [
+                  Icon(icon, size: 18, color: isSelected ? Colors.white : color),
+                  const SizedBox(width: 7),
+                  Text(name, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: isSelected ? Colors.white : AppColors.ink)),
+                ],
+              ),
             ),
-            itemCount: displayedProducts.length,
-            itemBuilder: (context, index) {
-              final product = displayedProducts[index];
-              return InkWell(
-                onTap: () => _addToCart(product),
-                borderRadius: BorderRadius.circular(isDesktop ? 24 : 16),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(isDesktop ? 24 : 16),
-                    border: Border.all(color: Colors.grey.shade100, width: 1.5),
-                    boxShadow: [BoxShadow(color: Colors.indigo.withOpacity(0.06), blurRadius: 15, offset: const Offset(0, 6))],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A product tile with a full-colour department band and a loud price.
+  Widget _productTag(Product product) {
+    final department = product.department;
+    final inCart = _cart.where((item) => item.product.id == product.id).firstOrNull;
+    final stockText = product.isOutOfStock ? 'Out of stock' : '${product.stockLabel} left';
+    final stockColor = !product.isOutOfStock && product.isLowStock ? AppColors.yellow : Colors.white;
+    final band = product.isOutOfStock ? const LinearGradient(colors: [Color(0xFF4A5560), Color(0xFF6B7681)]) : AppGradients.forColor(department.color);
+
+    return GlowTile(
+      onTap: () => _addToCart(product),
+      glow: department.color,
+      selected: inCart != null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            height: 38,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(gradient: band),
+            child: Row(
+              children: [
+                Icon(department.icon, size: 19, color: Colors.white),
+                const SizedBox(width: 7),
+                Expanded(child: Text(stockText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, color: stockColor, fontWeight: FontWeight.w700))),
+                if (inCart != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(color: AppColors.yellow, borderRadius: BorderRadius.circular(5)),
+                    child: Text(inCart.qtyLabel, style: const TextStyle(fontSize: 13, color: AppColors.navy, fontWeight: FontWeight.w800)),
                   ),
-                  child: Padding(
-                    padding: EdgeInsets.all(isDesktop ? 20.0 : 12.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              ],
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(11, 9, 11, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(product.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, height: 1.25)),
+                  const Spacer(),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
                       children: [
-                        Container(
-                          padding: EdgeInsets.all(isDesktop ? 14 : 10),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: [product.color.withOpacity(0.15), product.color.withOpacity(0.05)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                            borderRadius: BorderRadius.circular(isDesktop ? 16 : 12),
-                            border: Border.all(color: product.color.withOpacity(0.1))
-                          ),
-                          child: Icon(product.icon, color: product.color, size: isDesktop ? 32 : 24),
-                        ),
-                        const Spacer(),
-                        Text(product.name, style: TextStyle(fontWeight: FontWeight.w800, fontSize: isDesktop ? 15 : 13, height: 1.2, color: const Color(0xFF000000)), maxLines: 2, overflow: TextOverflow.ellipsis),
-                        SizedBox(height: isDesktop ? 10 : 6),
-                        Text('R ${product.price.toStringAsFixed(2)}', style: TextStyle(color: Theme.of(context).primaryColor, fontWeight: FontWeight.w900, fontSize: isDesktop ? 18 : 15)),
+                        Text(money(product.price), style: AppText.display(27, color: AppColors.red)),
+                        if (product.unit != 'each') Text(' / ${product.unit}', style: const TextStyle(fontSize: 13, color: AppColors.muted, fontWeight: FontWeight.w600)),
                       ],
                     ),
                   ),
-                ),
-              );
-            },
+                ],
+              ),
+            ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyState(IconData icon, String message, {String? actionLabel, VoidCallback? onAction}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 56, color: AppColors.muted),
+            const SizedBox(height: 12),
+            Text(message, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.muted, fontSize: 16, fontWeight: FontWeight.w500)),
+            if (actionLabel != null) ...[
+              const SizedBox(height: 14),
+              OutlinedButton(onPressed: onAction, child: Text(actionLabel)),
+            ],
+          ],
         ),
-      ],
+      ),
+    );
+  }
+
+  Widget _pageHeader(String title, bool isDesktop, {String? subtitle, Widget? trailing}) {
+    return Padding(
+      padding: EdgeInsets.all(isDesktop ? 24 : 16),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: AppText.display(isDesktop ? 38 : 30)),
+                const SizedBox(height: 6),
+                Container(width: 56, height: 5, decoration: BoxDecoration(gradient: AppGradients.hot, borderRadius: BorderRadius.circular(3))),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 8),
+                  Text(subtitle, style: const TextStyle(color: AppColors.muted, fontSize: 14)),
+                ],
+              ],
+            ),
+          ),
+          ?trailing,
+        ],
+      ),
     );
   }
 
@@ -1531,89 +1845,101 @@ class _PosScreenState extends State<PosScreen> {
   // INVENTORY VIEW
   // ==========================================
   Widget _buildInventoryView(bool isDesktop) {
-    double screenPadding = isDesktop ? 24.0 : 16.0;
-    double titleSize = isDesktop ? 32.0 : 24.0;
+    final pad = isDesktop ? 24.0 : 16.0;
+    final query = _inventorySearchController.text;
+    final lowCount = _inventory.where((p) => p.isLowStock).length;
+    final items = _inventory.where((p) =>
+      (_inventoryCategory == 'All' || p.category == _inventoryCategory) &&
+      (!_inventoryLowOnly || p.isLowStock) &&
+      p.matches(query)
+    ).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _pageHeader('Inventory', isDesktop,
+          subtitle: '${_inventory.length} items, $lowCount to reorder',
+          trailing: ElevatedButton.icon(onPressed: () => _productDialog(), icon: const Icon(Icons.add, size: 18), label: const Text('Add item')),
+        ),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: pad),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _inventorySearchController,
+                  decoration: InputDecoration(hintText: isDesktop ? 'Search name, SKU or barcode' : 'Search or scan', prefixIcon: const Icon(Icons.search), isDense: true, filled: true, fillColor: AppColors.surface),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilterChip(
+                label: const Text('Low stock'),
+                selected: _inventoryLowOnly,
+                selectedColor: AppColors.yellow,
+                backgroundColor: AppColors.surface,
+                onSelected: (val) => setState(() => _inventoryLowOnly = val),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: pad),
+          child: _departmentBar(_inventoryCategory, (name) => setState(() => _inventoryCategory = name)),
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: items.isEmpty
+              ? _emptyState(Icons.inventory_2_outlined, 'No items match these filters.')
+              : ListView.builder(
+                  padding: EdgeInsets.symmetric(horizontal: pad, vertical: 8),
+                  itemCount: items.length,
+                  itemBuilder: (context, index) => _inventoryRow(items[index], isDesktop),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _inventoryRow(Product p, bool isDesktop) {
+    final department = p.department;
+    final stockColor = p.isOutOfStock ? AppColors.red : (p.isLowStock ? AppColors.warn : AppColors.muted);
 
     return Container(
-      color: Theme.of(context).scaffoldBackgroundColor,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppColors.line)),
+      child: Row(
         children: [
-          Container(
-            padding: EdgeInsets.all(screenPadding),
-            width: double.infinity,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Icon(department.icon, color: department.color, size: 24),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Inventory', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
-                      const SizedBox(height: 4),
-                      Text('Manage product catalogue.', style: TextStyle(color: Colors.grey.shade600, fontSize: isDesktop ? 16 : 14)),
-                    ],
-                  ),
-                ),
-                ElevatedButton.icon(
-                  onPressed: _addNewProductDialog,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: isDesktop ? const Text('Add Item') : const Text('Add'),
-                  style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white, elevation: 2, padding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 12, vertical: isDesktop ? 16 : 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                )
+                Text(p.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                const SizedBox(height: 3),
+                Text('${p.stockLabel} in stock', style: TextStyle(fontSize: 13, color: stockColor, fontWeight: FontWeight.w500)),
+                Text('SKU ${p.id}', style: const TextStyle(fontSize: 12, color: AppColors.muted)),
               ],
             ),
           ),
-          Expanded(
-            child: ListView.builder(
-              padding: EdgeInsets.symmetric(horizontal: screenPadding, vertical: 8),
-              physics: const BouncingScrollPhysics(),
-              itemCount: _inventory.length,
-              itemBuilder: (context, index) {
-                final p = _inventory[index];
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(isDesktop ? 20 : 16),
-                    boxShadow: [BoxShadow(color: Colors.grey.shade200.withOpacity(0.8), blurRadius: 10, offset: const Offset(0, 4))],
-                  ),
-                  child: ListTile(
-                    contentPadding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 16, vertical: 8),
-                    leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: p.color.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(p.icon, color: p.color, size: 24)),
-                    title: Text(p.name, style: TextStyle(fontWeight: FontWeight.w800, color: const Color(0xFF000000), fontSize: isDesktop ? 16 : 14)),
-                    subtitle: Padding(
-                      padding: const EdgeInsets.only(top: 4.0),
-                      child: Text('Stock: ${p.stockQuantity.toStringAsFixed(1)} units  •  ID: ${p.id}', style: TextStyle(fontSize: 12, color: p.stockQuantity < 5 ? Colors.red.shade600 : Colors.grey.shade500, fontWeight: FontWeight.w500)),
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('R ${p.price.toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: isDesktop ? 18 : 16, color: const Color(0xFF000000))),
-                        const SizedBox(width: 12),
-                        Container(
-                          decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(10)),
-                          child: IconButton(
-                            icon: Icon(Icons.edit, color: Colors.grey.shade600, size: 20),
-                            onPressed: () => _editPriceDialog(p),
-                            tooltip: 'Edit Price',
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(10)),
-                          child: IconButton(
-                            icon: Icon(Icons.delete_outline, color: Colors.red.shade400, size: 20),
-                            onPressed: () => _deleteProduct(p),
-                            tooltip: 'Delete Product',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
+          const SizedBox(width: 8),
+          Text(p.priceLabel, style: AppText.display(isDesktop ? 22 : 18)),
+          const SizedBox(width: 4),
+          IconButton(tooltip: 'Adjust stock', icon: const Icon(Icons.add_box_outlined, color: AppColors.navy), onPressed: () => _adjustStockDialog(p)),
+          PopupMenuButton<String>(
+            tooltip: 'More actions',
+            icon: const Icon(Icons.more_vert, color: AppColors.muted),
+            onSelected: (val) {
+              if (val == 'edit') _productDialog(p);
+              if (val == 'delete') _deleteProduct(p);
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'edit', child: Text('Edit item')),
+              PopupMenuItem(value: 'delete', child: Text('Delete item')),
+            ],
           ),
         ],
       ),
@@ -1625,7 +1951,6 @@ class _PosScreenState extends State<PosScreen> {
   // ==========================================
   Widget _buildLedgerView(bool isDesktop) {
     double screenPadding = isDesktop ? 24.0 : 16.0;
-    double titleSize = isDesktop ? 32.0 : 24.0;
 
     List<OrderTransaction> filteredHistory = _history.where((tx) {
       String query = _ledgerSearchController.text.toLowerCase();
@@ -1639,45 +1964,13 @@ class _PosScreenState extends State<PosScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: EdgeInsets.all(screenPadding),
-            width: double.infinity,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Ledger', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
-                if (isDesktop) SizedBox(
-                  width: 300,
-                  child: TextField(
-                    controller: _ledgerSearchController,
-                    decoration: InputDecoration(
-                      hintText: 'Search by ID or Customer...',
-                      prefixIcon: const Icon(Icons.search),
-                      isDense: true,
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                    ),
-                    onChanged: (val) => setState(() {}),
-                  ),
-                ),
-              ],
-            ),
+          _pageHeader('Sales', isDesktop,
+            subtitle: 'Every sale, with receipts and unpaid orders.',
+            trailing: isDesktop ? SizedBox(width: 300, child: _ledgerSearchField()) : null,
           ),
           if (!isDesktop) Padding(
             padding: EdgeInsets.symmetric(horizontal: screenPadding),
-            child: TextField(
-              controller: _ledgerSearchController,
-              decoration: InputDecoration(
-                hintText: 'Search by ID or Customer...',
-                prefixIcon: const Icon(Icons.search),
-                isDense: true,
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-              ),
-              onChanged: (val) => setState(() {}),
-            ),
+            child: _ledgerSearchField(),
           ),
           Expanded(
             child: filteredHistory.isEmpty
@@ -1696,21 +1989,21 @@ class _PosScreenState extends State<PosScreen> {
                     physics: const BouncingScrollPhysics(),
                     gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
                       maxCrossAxisExtent: 450,
-                      childAspectRatio: isDesktop ? 1.1 : 0.95, 
+                      mainAxisExtent: 240,
                       crossAxisSpacing: isDesktop ? 20 : 12,
                       mainAxisSpacing: isDesktop ? 20 : 12,
                     ),
                     itemCount: filteredHistory.length,
                     itemBuilder: (context, index) {
                       final tx = filteredHistory[index];
-                      int itemCount = tx.items.fold(0, (sum, item) => sum + item.quantity);
+                      int itemCount = tx.items.length;
                       MaterialColor statusColor = tx.paymentStatus == 'Paid' ? Colors.green : Colors.orange;
                       
                       return Container(
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(isDesktop ? 24 : 16),
-                          boxShadow: [BoxShadow(color: Colors.grey.shade200.withOpacity(0.8), blurRadius: 15, offset: const Offset(0, 6))],
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.line),
                         ),
                         clipBehavior: Clip.antiAlias,
                         child: Row(
@@ -1731,8 +2024,8 @@ class _PosScreenState extends State<PosScreen> {
                                             children: [
                                               Container(
                                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                                decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(6)),
-                                                child: Text(tx.id, style: const TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.w800, fontSize: 10)),
+                                                decoration: BoxDecoration(color: AppColors.redTint, borderRadius: BorderRadius.circular(6)),
+                                                child: Text(tx.id, style: const TextStyle(color: AppColors.red, fontWeight: FontWeight.w800, fontSize: 10)),
                                               ),
                                               const SizedBox(width: 8),
                                               Container(
@@ -1757,18 +2050,18 @@ class _PosScreenState extends State<PosScreen> {
                                       ],
                                     ),
                                     const SizedBox(height: 12),
-                                    Text('R ${tx.total.toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: isDesktop ? 20 : 18, color: const Color(0xFF000000))),
+                                    Text('R ${tx.total.toStringAsFixed(2)}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: isDesktop ? 20 : 18, color: AppColors.ink)),
                                     const SizedBox(height: 4),
                                     Text('${tx.date.day}/${tx.date.month}/${tx.date.year} at ${tx.date.hour}:${tx.date.minute.toString().padLeft(2, '0')}', style: TextStyle(color: Colors.grey.shade500, fontSize: 12, fontWeight: FontWeight.w500)),
                                     
                                     if (tx.customerName != null || tx.businessName != null)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 6.0),
-                                        child: Text('${tx.customerName ?? ''} ${tx.businessName != null ? '(${tx.businessName})' : ''}', style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        child: Text('${tx.customerName ?? ''} ${tx.businessName != null ? '(${tx.businessName})' : ''}', style: const TextStyle(color: AppColors.red, fontSize: 13, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
                                       ),
 
                                     const SizedBox(height: 4),
-                                    Text('$itemCount items', style: TextStyle(color: Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.w500)),
+                                    Text('$itemCount line${itemCount == 1 ? '' : 's'}', style: TextStyle(color: Colors.grey.shade600, fontSize: 12, fontWeight: FontWeight.w500)),
                                     const Spacer(),
                                     Row(
                                       children: [
@@ -1800,13 +2093,13 @@ class _PosScreenState extends State<PosScreen> {
                                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                             child: Container(
                                               padding: const EdgeInsets.symmetric(vertical: 8),
-                                              decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(10)),
+                                              decoration: BoxDecoration(color: AppColors.redTint, borderRadius: BorderRadius.circular(10)),
                                               child: Row(
                                                 mainAxisAlignment: MainAxisAlignment.center,
                                                 children: const [
-                                                  Icon(Icons.download, size: 16, color: Color(0xFFDC2626)),
+                                                  Icon(Icons.download, size: 16, color: AppColors.red),
                                                   SizedBox(width: 4),
-                                                  Text('Docs', style: TextStyle(color: Color(0xFFDC2626), fontSize: 12, fontWeight: FontWeight.bold))
+                                                  Text('Docs', style: TextStyle(color: AppColors.red, fontSize: 12, fontWeight: FontWeight.bold))
                                                 ],
                                               ),
                                             ),
@@ -1844,37 +2137,15 @@ class _PosScreenState extends State<PosScreen> {
   // ==========================================
   Widget _buildCustomersView(bool isDesktop) {
     double screenPadding = isDesktop ? 24.0 : 16.0;
-    double titleSize = isDesktop ? 32.0 : 24.0;
 
     return Container(
       color: Theme.of(context).scaffoldBackgroundColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: EdgeInsets.all(screenPadding),
-            width: double.infinity,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Customers', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
-                      const SizedBox(height: 4),
-                      Text('Manage accounts & debt.', style: TextStyle(color: Colors.grey.shade600, fontSize: isDesktop ? 16 : 14)),
-                    ],
-                  ),
-                ),
-                ElevatedButton.icon(
-                  onPressed: () => _addOrEditCustomerDialog(),
-                  icon: const Icon(Icons.person_add, size: 18),
-                  label: isDesktop ? const Text('Add Customer') : const Text('Add'),
-                  style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white, elevation: 2, padding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 12, vertical: isDesktop ? 16 : 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                )
-              ],
-            ),
+          _pageHeader('Customers', isDesktop,
+            subtitle: 'Accounts and what they owe.',
+            trailing: ElevatedButton.icon(onPressed: () => _addOrEditCustomerDialog(), icon: const Icon(Icons.person_add, size: 18), label: Text(isDesktop ? 'Add customer' : 'Add')),
           ),
           Expanded(
             child: _customers.isEmpty
@@ -1899,13 +2170,13 @@ class _PosScreenState extends State<PosScreen> {
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(16),
-                          boxShadow: [BoxShadow(color: Colors.grey.shade200.withOpacity(0.8), blurRadius: 10, offset: const Offset(0, 4))],
+                          border: Border.all(color: AppColors.line),
                         ),
                         child: ExpansionTile(
                           shape: const Border(),
                           tilePadding: EdgeInsets.symmetric(horizontal: isDesktop ? 24 : 16, vertical: 8),
                           leading: CircleAvatar(backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1), radius: 20, child: Text(c.name[0].toUpperCase(), style: TextStyle(color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold, fontSize: 16))),
-                          title: Text(c.name, style: TextStyle(fontWeight: FontWeight.w800, color: const Color(0xFF000000), fontSize: isDesktop ? 16 : 14)),
+                          title: Text(c.name, style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.ink, fontSize: isDesktop ? 16 : 14)),
                           subtitle: Text(c.businessName ?? 'Individual Client', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
                           trailing: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -1979,7 +2250,6 @@ class _PosScreenState extends State<PosScreen> {
   // ==========================================
   Widget _buildExpensesView(bool isDesktop) {
     double screenPadding = isDesktop ? 24.0 : 16.0;
-    double titleSize = isDesktop ? 32.0 : 24.0;
     double totalExpenses = _expenses.fold(0, (sum, exp) => sum + exp.amount);
 
     return Container(
@@ -1987,30 +2257,9 @@ class _PosScreenState extends State<PosScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: EdgeInsets.all(screenPadding),
-            width: double.infinity,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Expenses', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
-                      const SizedBox(height: 4),
-                      Text('Recorded: R ${totalExpenses.toStringAsFixed(2)}', style: const TextStyle(color: Colors.red, fontSize: 14, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-                ElevatedButton.icon(
-                  onPressed: _addExpenseDialog,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: isDesktop ? const Text('Record Expense') : const Text('Add'),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade400, foregroundColor: Colors.white, elevation: 2, padding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 12, vertical: isDesktop ? 16 : 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                )
-              ],
-            ),
+          _pageHeader('Expenses', isDesktop,
+            subtitle: 'Recorded: ${money(totalExpenses)}',
+            trailing: ElevatedButton.icon(onPressed: _addExpenseDialog, icon: const Icon(Icons.add, size: 18), label: Text(isDesktop ? 'Record expense' : 'Add')),
           ),
           Expanded(
             child: _expenses.isEmpty
@@ -2035,12 +2284,12 @@ class _PosScreenState extends State<PosScreen> {
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(16),
-                          boxShadow: [BoxShadow(color: Colors.grey.shade200.withOpacity(0.8), blurRadius: 10, offset: const Offset(0, 4))],
+                          border: Border.all(color: AppColors.line),
                         ),
                         child: ListTile(
                           contentPadding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 16, vertical: 8),
                           leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(Icons.money_off, color: Colors.red.shade400, size: 24)),
-                          title: Text(exp.description, style: TextStyle(fontWeight: FontWeight.w800, color: const Color(0xFF000000), fontSize: isDesktop ? 16 : 14)),
+                          title: Text(exp.description, style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.ink, fontSize: isDesktop ? 16 : 14)),
                           subtitle: Padding(
                             padding: const EdgeInsets.only(top: 4.0),
                             child: Text('${exp.category}  •  ${exp.date.day}/${exp.date.month}/${exp.date.year}', style: TextStyle(fontSize: 12, color: Colors.grey.shade500, fontWeight: FontWeight.w500)),
@@ -2071,60 +2320,32 @@ class _PosScreenState extends State<PosScreen> {
   // ==========================================
   Widget _buildReportsView(bool isDesktop) {
     double screenPadding = isDesktop ? 24.0 : 16.0;
-    double titleSize = isDesktop ? 32.0 : 24.0;
 
     return Container(
       color: Theme.of(context).scaffoldBackgroundColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: EdgeInsets.all(screenPadding),
-            width: double.infinity,
-            child: Text('Reports & Analytics', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
-          ),
+          _pageHeader('Reports', isDesktop, subtitle: 'Create a PDF to print or share.'),
           Expanded(
             child: SingleChildScrollView(
-              padding: EdgeInsets.all(screenPadding),
-              child: isDesktop 
-                ? Row(
-                    children: [
-                      Expanded(
-                        child: _buildReportGeneratorCard(
-                          'Daily Cash-Up',
-                          'End-of-day report detailing all sales and expenses.',
-                          Icons.today,
-                          () => PdfGenerator.generateFinancialReportPdf('End of Day Report (Today)', _history, _expenses, _storeName),
-                        ),
-                      ),
-                      const SizedBox(width: 24),
-                      Expanded(
-                        child: _buildReportGeneratorCard(
-                          'Monthly Summary',
-                          'Generate a full P&L statement for the month.',
-                          Icons.calendar_month,
-                          () => PdfGenerator.generateFinancialReportPdf('Monthly Profit & Loss Statement', _history, _expenses, _storeName),
-                        ),
-                      ),
-                    ],
-                  )
-                : Column(
-                    children: [
-                      _buildReportGeneratorCard(
-                        'Daily Cash-Up',
-                        'End-of-day report detailing all sales and expenses.',
-                        Icons.today,
-                        () => PdfGenerator.generateFinancialReportPdf('End of Day Report (Today)', _history, _expenses, _storeName),
-                      ),
-                      const SizedBox(height: 16),
-                      _buildReportGeneratorCard(
-                        'Monthly Summary',
-                        'Generate a full P&L statement for the month.',
-                        Icons.calendar_month,
-                        () => PdfGenerator.generateFinancialReportPdf('Monthly Profit & Loss Statement', _history, _expenses, _storeName),
-                      ),
-                    ],
-                  )
+              padding: EdgeInsets.symmetric(horizontal: screenPadding),
+              child: Builder(builder: (context) {
+                final now = DateTime.now();
+                final startOfDay = DateTime(now.year, now.month, now.day);
+                final startOfMonth = DateTime(now.year, now.month);
+                final cards = [
+                  _buildReportGeneratorCard('Daily cash-up', 'All of today\'s sales and expenses.', Icons.today,
+                    () => PdfGenerator.generateFinancialReportPdf('End of Day Report (Today)', _history.where((tx) => !tx.date.isBefore(startOfDay)).toList(), _expenses.where((e) => !e.date.isBefore(startOfDay)).toList(), _storeName)),
+                  _buildReportGeneratorCard('Monthly summary', 'Profit and loss for this month.', Icons.calendar_month,
+                    () => PdfGenerator.generateFinancialReportPdf('Monthly Profit & Loss Statement', _history.where((tx) => !tx.date.isBefore(startOfMonth)).toList(), _expenses.where((e) => !e.date.isBefore(startOfMonth)).toList(), _storeName)),
+                  _buildReportGeneratorCard('Reorder list', 'Every item at or below its reorder level.', Icons.playlist_add_check,
+                    () => PdfGenerator.printReorderList(_inventory.where((p) => p.isLowStock).toList(), _storeName)),
+                ];
+                return isDesktop
+                    ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [for (int i = 0; i < cards.length; i++) ...[if (i > 0) const SizedBox(width: 12), Expanded(child: cards[i])]])
+                    : Column(children: [for (final card in cards) Padding(padding: const EdgeInsets.only(bottom: 12), child: card)]);
+              }),
             ),
           ),
         ],
@@ -2135,11 +2356,11 @@ class _PosScreenState extends State<PosScreen> {
   Widget _buildReportGeneratorCard(String title, String desc, IconData icon, VoidCallback onTap) {
     return Container(
       padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: Colors.grey.shade200.withOpacity(0.8), blurRadius: 15, offset: const Offset(0, 6))]),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.line)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: const Color(0xFFDC2626), size: 32)),
+          Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.redTint, borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: AppColors.red, size: 32)),
           const SizedBox(height: 20),
           Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
@@ -2165,7 +2386,6 @@ class _PosScreenState extends State<PosScreen> {
   // ==========================================
   Widget _buildSettingsView(bool isDesktop) {
     double screenPadding = isDesktop ? 24.0 : 16.0;
-    double titleSize = isDesktop ? 32.0 : 24.0;
     
     TextEditingController storeNameCtrl = TextEditingController(text: _storeName);
     TextEditingController vatCtrl = TextEditingController(text: (_globalVatRate * 100).toStringAsFixed(0));
@@ -2178,11 +2398,7 @@ class _PosScreenState extends State<PosScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: EdgeInsets.all(screenPadding),
-            width: double.infinity,
-            child: Text('Settings', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.w900, color: const Color(0xFF000000), letterSpacing: -1)),
-          ),
+          _pageHeader('Settings', isDesktop, subtitle: 'Store details printed on receipts and invoices.'),
           Expanded(
             child: SingleChildScrollView(
               padding: EdgeInsets.symmetric(horizontal: screenPadding),
@@ -2190,11 +2406,11 @@ class _PosScreenState extends State<PosScreen> {
                 children: [
                   Container(
                     padding: EdgeInsets.all(isDesktop ? 32 : 20),
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: Colors.grey.shade200.withOpacity(0.8), blurRadius: 10, offset: const Offset(0, 4))]),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.line)),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Global Configuration', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF000000))),
+                        const Text('Global Configuration', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.ink)),
                         const SizedBox(height: 20),
                         if (isDesktop)
                           Row(
@@ -2259,7 +2475,7 @@ class _PosScreenState extends State<PosScreen> {
                   const SizedBox(height: 20),
                   Container(
                     padding: EdgeInsets.all(isDesktop ? 32 : 20),
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.red.shade100), boxShadow: [BoxShadow(color: Colors.grey.shade200.withOpacity(0.8), blurRadius: 10, offset: const Offset(0, 4))]),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.red.shade100)),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -2306,76 +2522,67 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   // --- SIDEBAR & PANELS ---
-  Widget _buildSidebar() {
-    return Container(
-      width: 260,
-      decoration: BoxDecoration(
-        color: const Color(0xFF000000), 
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 10, offset: const Offset(4, 0))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildBrandBlock() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 20, 14, 18),
+      child: Row(
         children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 32.0),
-            child: Row(
+          const SolumateLogo(size: 58),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 40, height: 40,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [Color(0xFFFCA5A5), Color(0xFFDC2626)], begin: Alignment.topLeft, end: Alignment.bottomRight), 
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [BoxShadow(color: const Color(0xFFDC2626).withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 4))]
-                  ),
-                  child: const Center(child: Text('S', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 22))),
-                ),
-                const SizedBox(width: 16),
-                const Text('Solumate.', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -0.5)),
+                FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: GoldText('Solumate', style: AppText.display(30))),
+                const Text('Business OS', maxLines: 1, style: TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w500)),
               ],
             ),
           ),
-          
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebar() {
+    final lowCount = _inventory.where((p) => p.isLowStock).length;
+    return Container(
+      width: 224,
+      decoration: const BoxDecoration(gradient: AppGradients.sidebar),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildBrandBlock(),
           Expanded(
             child: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('MAIN', style: TextStyle(color: Colors.white30, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.5))),
-                  const SizedBox(height: 8),
-                  _buildSidebarItem(Icons.bar_chart, 'Dashboard', 0),
                   _buildSidebarItem(Icons.point_of_sale, 'Point of Sale', 1),
-                  _buildSidebarItem(Icons.receipt_long, 'Ledger', 2),
-                  
-                  const SizedBox(height: 24),
-                  const Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('MANAGEMENT', style: TextStyle(color: Colors.white30, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.5))),
-                  const SizedBox(height: 8),
-                  _buildSidebarItem(Icons.inventory_2, 'Inventory', 3),
+                  _buildSidebarItem(Icons.bar_chart, 'Dashboard', 0),
+                  _buildSidebarItem(Icons.receipt_long, 'Sales', 2),
+                  _buildSidebarItem(Icons.request_quote, 'Quotes', 8),
+                  const Divider(color: Colors.white24, indent: 20, endIndent: 20, height: 24),
+                  _buildSidebarItem(Icons.inventory_2, 'Inventory', 3, badge: lowCount > 0 ? '$lowCount' : null),
                   _buildSidebarItem(Icons.people, 'Customers', 4),
                   _buildSidebarItem(Icons.account_balance_wallet, 'Expenses', 5),
-                  
-                  const SizedBox(height: 24),
-                  const Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: Text('SYSTEM', style: TextStyle(color: Colors.white30, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.5))),
-                  const SizedBox(height: 8),
+                  const Divider(color: Colors.white24, indent: 20, endIndent: 20, height: 24),
                   _buildSidebarItem(Icons.analytics, 'Reports', 6),
                   _buildSidebarItem(Icons.settings, 'Settings', 7),
                 ],
               ),
             ),
           ),
-          
-          Container(
-            margin: const EdgeInsets.all(20),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(16)),
+          Padding(
+            padding: const EdgeInsets.all(18),
             child: Row(
               children: [
-                CircleAvatar(backgroundColor: const Color(0xFFDC2626), radius: 18, child: const Text('MW', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12))),
-                const SizedBox(width: 12),
+                const CircleAvatar(backgroundColor: AppColors.navyRaised, radius: 17, child: Text('MW', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12))),
+                const SizedBox(width: 10),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('M. Wajah', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white)),
-                    Text('Admin', style: TextStyle(fontSize: 12, color: Colors.indigo.shade200)),
+                  children: const [
+                    Text('M. Wajah', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white)),
+                    Text('Admin', style: TextStyle(fontSize: 12, color: Colors.white60)),
                   ],
                 ),
               ],
@@ -2386,183 +2593,131 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  Widget _buildSidebarItem(IconData icon, String label, int index) {
-    bool isActive = _currentMenuIndex == index;
+  Widget _buildSidebarItem(IconData icon, String label, int index, {String? badge}) {
+    final isActive = _currentMenuIndex == index;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: InkWell(
-        onTap: () {
-          setState(() => _currentMenuIndex = index);
-          if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
-            Navigator.pop(context);
-          }
-        },
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          decoration: BoxDecoration(
-            color: isActive ? const Color(0xFFDC2626).withOpacity(0.15) : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            children: [
-              Icon(icon, color: isActive ? const Color(0xFFFCA5A5) : Colors.white54, size: 22),
-              const SizedBox(width: 16),
-              Text(label, style: TextStyle(color: isActive ? Colors.white : Colors.white70, fontWeight: isActive ? FontWeight.bold : FontWeight.w500, fontSize: 15)),
-            ],
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        decoration: BoxDecoration(
+          gradient: isActive ? AppGradients.gold : null,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: isActive ? [BoxShadow(color: AppColors.orange.withValues(alpha: 0.6), blurRadius: 14, offset: const Offset(0, 4))] : null,
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          borderRadius: BorderRadius.circular(8),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () {
+              setState(() => _currentMenuIndex = index);
+              if (_scaffoldKey.currentState?.isDrawerOpen ?? false) Navigator.pop(context);
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              child: Row(
+                children: [
+                  Icon(icon, color: isActive ? AppColors.navyDeep : Colors.white70, size: 21),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(label, style: TextStyle(color: isActive ? AppColors.navyDeep : Colors.white, fontWeight: isActive ? FontWeight.w800 : FontWeight.w500, fontSize: 15))),
+                  if (badge != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                      decoration: BoxDecoration(color: isActive ? AppColors.navyDeep : AppColors.red, borderRadius: BorderRadius.circular(5)),
+                      child: Text(badge, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildCartPanel() {
+  Widget _buildCartPanel({bool inSheet = false}) {
     return Container(
-      width: 400,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(left: BorderSide(color: Colors.grey.shade200)),
-      ),
+      width: inSheet ? double.infinity : 380,
+      decoration: const BoxDecoration(color: AppColors.surface, border: Border(left: BorderSide(color: AppColors.line))),
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Colors.grey.shade100))),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 10, 10),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Current Order', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF000000))),
-                if (_cart.isNotEmpty)
-                  InkWell(
-                    onTap: _clearCart, 
-                    child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8)), child: Text('Clear All', style: TextStyle(color: Colors.red.shade600, fontWeight: FontWeight.bold, fontSize: 12)))
-                  ),
+                Expanded(child: Text('Current order', style: AppText.display(24))),
+                if (_cart.isNotEmpty) TextButton(onPressed: _clearCart, child: const Text('Clear order', style: TextStyle(color: AppColors.red))),
               ],
             ),
           ),
+          if (_loadedQuote != null)
+            Container(
+              width: double.infinity,
+              color: AppColors.yellow,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+              child: Text('From quote ${_loadedQuote!.id}', style: const TextStyle(color: AppColors.navy, fontWeight: FontWeight.w600, fontSize: 13)),
+            ),
+          const Divider(height: 1, color: AppColors.line),
           Expanded(
             child: _cart.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: Colors.grey.shade50, shape: BoxShape.circle), child: Icon(Icons.shopping_bag_outlined, size: 48, color: Colors.grey.shade300)),
-                        const SizedBox(height: 16),
-                        Text('Your cart is empty', style: TextStyle(color: Colors.grey.shade400, fontWeight: FontWeight.bold, fontSize: 16)),
-                      ],
-                    ),
-                  )
+                ? _emptyState(Icons.shopping_basket_outlined, 'Tap an item to start an order.')
                 : ListView.separated(
-                    padding: const EdgeInsets.all(24),
-                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
                     itemCount: _cart.length,
-                    separatorBuilder: (context, index) => const SizedBox(height: 20),
-                    itemBuilder: (context, index) {
-                      final item = _cart[index];
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(item.product.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF000000))),
-                                const SizedBox(height: 4),
-                                Text('R ${item.product.price.toStringAsFixed(2)} each', style: TextStyle(color: Colors.grey.shade500, fontSize: 13, fontWeight: FontWeight.w500)),
-                              ],
-                            ),
-                          ),
-                          Container(
-                            decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200)),
-                            child: Row(
-                              children: [
-                                InkWell(onTap: () => _updateQuantity(item, -1), borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)), child: const Padding(padding: EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0), child: Icon(Icons.remove, size: 18, color: Colors.black87))),
-                                InkWell(
-                                  onTap: () => _editQuantityDialog(item),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                                    child: Text('${item.quantity}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-                                  ),
-                                ),
-                                InkWell(onTap: () => _updateQuantity(item, 1), borderRadius: const BorderRadius.horizontal(right: Radius.circular(12)), child: const Padding(padding: EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0), child: Icon(Icons.add, size: 18, color: Colors.black87))),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 20),
-                          SizedBox(
-                            width: 75,
-                            child: Text('R ${item.totalPrice.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Color(0xFF000000)), textAlign: TextAlign.right),
-                          ),
-                        ],
-                      );
-                    },
+                    separatorBuilder: (context, index) => const Divider(height: 1, color: AppColors.line),
+                    itemBuilder: (context, index) => _cartLine(_cart[index]),
                   ),
           ),
           Container(
-            padding: const EdgeInsets.all(32),
-            decoration: BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: Colors.grey.shade100)), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, -4))]),
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 16),
+            decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.line))),
             child: Column(
               children: [
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('Apply VAT (${(_globalVatRate*100).toInt()}%)', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey.shade700, fontSize: 15)),
-                    Switch(
-                      value: _applyVat,
-                      activeColor: const Color(0xFF4F46E5),
-                      onChanged: (val) => _updateState(() => _applyVat = val), 
-                    ),
+                    Text('VAT ${(_globalVatRate * 100).toStringAsFixed(0)}%', style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.muted)),
+                    Switch(value: _applyVat, onChanged: (val) => _updateState(() => _applyVat = val)),
+                    const Spacer(),
+                    TextButton.icon(onPressed: _addDiscountDialog, icon: const Icon(Icons.sell_outlined, size: 18), label: const Text('Discount')),
                   ],
                 ),
+                _totalRow('Subtotal', money(_subTotal)),
+                if (_discountAmount > 0) _totalRow('Discount', '-${money(_discountAmount)}', color: AppColors.red),
+                if (_applyVat) _totalRow('VAT', money(_vatAmount)),
                 const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    TextButton.icon(
-                      onPressed: _addDiscountDialog,
-                      icon: const Icon(Icons.discount, size: 18),
-                      label: const Text('Add Discount', style: TextStyle(fontWeight: FontWeight.bold)),
-                      style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact, foregroundColor: Colors.indigo.shade400),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Subtotal', style: TextStyle(color: Colors.grey.shade500, fontSize: 15, fontWeight: FontWeight.w500)), Text('R ${_subTotal.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15))]),
-                if (_discountAmount > 0) const SizedBox(height: 8),
-                if (_discountAmount > 0) Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Discount', style: TextStyle(color: Colors.red.shade400, fontSize: 15, fontWeight: FontWeight.w500)), Text('-R ${_discountAmount.toStringAsFixed(2)}', style: TextStyle(color: Colors.red.shade500, fontWeight: FontWeight.bold, fontSize: 15))]),
-                if (_applyVat) const SizedBox(height: 8),
-                if (_applyVat) Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('VAT', style: TextStyle(color: Colors.grey.shade500, fontSize: 15, fontWeight: FontWeight.w500)), Text('R ${_vatAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15))]),
-                const Padding(padding: EdgeInsets.symmetric(vertical: 20.0), child: Divider(height: 1, color: Color(0xFFE2E8F0))),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Total', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Color(0xFF000000))),
-                    Text('R ${_grandTotal.toStringAsFixed(2)}', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: Color(0xFFDC2626), letterSpacing: -1)),
-                  ],
-                ),
-                const SizedBox(height: 32),
-                SizedBox(
-                  width: double.infinity, height: 60,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      padding: EdgeInsets.zero,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      elevation: 4,
-                      shadowColor: const Color(0xFFDC2626).withOpacity(0.5),
-                    ),
-                    onPressed: _cart.isEmpty ? null : _showCheckoutDialog,
-                    child: Ink(
-                      decoration: BoxDecoration(
-                        gradient: _cart.isEmpty ? null : const LinearGradient(colors: [Color(0xFFFCA5A5), Color(0xFFDC2626)]),
-                        color: _cart.isEmpty ? Colors.grey.shade300 : null,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Container(
-                        alignment: Alignment.center,
-                        child: const Text('Checkout', style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-                      ),
-                    ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(colors: [AppColors.navyDeep, Color(0xFF2A1238)]),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.orange.withValues(alpha: 0.6)),
                   ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Total', style: AppText.display(24, color: Colors.white)),
+                      const SizedBox(width: 12),
+                      Flexible(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerRight,
+                          child: Text(money(_grandTotal), style: AppText.display(42, color: AppColors.yellow).copyWith(shadows: [Shadow(color: AppColors.orange.withValues(alpha: 0.9), blurRadius: 16)])),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    OutlinedButton(
+                      onPressed: _cart.isEmpty ? null : _saveQuoteDialog,
+                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 56), padding: const EdgeInsets.symmetric(horizontal: 16)),
+                      child: const Text('Save quote'),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(child: FlashButton(label: 'Checkout', onPressed: _cart.isEmpty ? null : _showCheckoutDialog)),
+                  ],
                 ),
               ],
             ),
@@ -2571,7 +2726,288 @@ class _PosScreenState extends State<PosScreen> {
       ),
     );
   }
-  
+
+  Widget _totalRow(String label, String value, {Color color = AppColors.muted}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: TextStyle(color: color, fontSize: 14)),
+          Text(value, style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  Widget _cartLine(CartItem item) {
+    Widget stepButton(IconData icon, String tooltip, VoidCallback onTap) => IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon, size: 18, color: AppColors.navy),
+      visualDensity: VisualDensity.compact,
+      onPressed: onTap,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: Text(item.product.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14))),
+              const SizedBox(width: 10),
+              Text(money(item.totalPrice), style: AppText.display(18)),
+            ],
+          ),
+          Row(
+            children: [
+              Expanded(child: Text(item.product.priceLabel, style: const TextStyle(color: AppColors.muted, fontSize: 13))),
+              Container(
+                decoration: BoxDecoration(color: AppColors.ground, borderRadius: BorderRadius.circular(6)),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    stepButton(Icons.remove, 'Reduce quantity', () => _updateQuantity(item, -1)),
+                    InkWell(
+                      onTap: () => _editQuantityDialog(item),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                        child: Text(item.qtyLabel, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                      ),
+                    ),
+                    stepButton(Icons.add, 'Increase quantity', () => _updateQuantity(item, 1)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _ledgerSearchField() {
+    return TextField(
+      controller: _ledgerSearchController,
+      decoration: const InputDecoration(hintText: 'Search by order number or customer', prefixIcon: Icon(Icons.search), isDense: true, filled: true, fillColor: AppColors.surface),
+      onChanged: (_) => setState(() {}),
+    );
+  }
+
+  // ==========================================
+  // QUOTES
+  // ==========================================
+
+  Future<void> _saveQuoteDialog() async {
+    Customer? selectedCustomer = _customers.where((c) => c.id == _loadedQuote?.customerId).firstOrNull;
+    final nameCtrl = TextEditingController(text: _loadedQuote?.customerName);
+    final businessCtrl = TextEditingController(text: _loadedQuote?.businessName);
+    int validDays = 14;
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Save quote'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_customers.isNotEmpty) ...[
+                  DropdownButtonFormField<Customer?>(
+                    initialValue: selectedCustomer,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Existing customer'),
+                    items: [
+                      const DropdownMenuItem<Customer?>(value: null, child: Text('New customer')),
+                      ..._customers.map((c) => DropdownMenuItem<Customer?>(value: c, child: Text(c.name, overflow: TextOverflow.ellipsis))),
+                    ],
+                    onChanged: (val) => setDialogState(() {
+                      selectedCustomer = val;
+                      nameCtrl.text = val?.name ?? '';
+                      businessCtrl.text = val?.businessName ?? '';
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                TextField(controller: nameCtrl, textCapitalization: TextCapitalization.words, decoration: const InputDecoration(labelText: 'Customer name')),
+                const SizedBox(height: 12),
+                TextField(controller: businessCtrl, textCapitalization: TextCapitalization.words, decoration: const InputDecoration(labelText: 'Business name (optional)')),
+                const SizedBox(height: 16),
+                const Text('Valid for', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  children: [7, 14, 30].map((days) => ChoiceChip(
+                    label: Text('$days days'),
+                    selected: validDays == days,
+                    onSelected: (_) => setDialogState(() => validDays = days),
+                  )).toList(),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () {
+                final now = DateTime.now();
+                final name = nameCtrl.text.trim();
+                final business = businessCtrl.text.trim();
+                final quote = Quote(
+                  id: 'QTE-${now.millisecondsSinceEpoch.toString().substring(7)}',
+                  date: now,
+                  validUntil: now.add(Duration(days: validDays)),
+                  total: _grandTotal,
+                  subtotal: _subTotal,
+                  discount: _discountAmount,
+                  vat: _vatAmount,
+                  items: _cart.map((item) => CartItem(product: Product.fromJson(item.product.toJson()), quantity: item.quantity)).toList(),
+                  includesVat: _applyVat,
+                  customerId: selectedCustomer?.id,
+                  customerName: name.isEmpty ? null : name,
+                  businessName: business.isEmpty ? null : business,
+                );
+                setState(() => _quotes.insert(0, quote));
+                _saveQuotesToDatabase();
+                Navigator.pop(dialogContext);
+                if (_cartSheetSetState != null) Navigator.pop(context);
+                _clearCart();
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('Quote ${quote.id} saved.'),
+                  width: MediaQuery.of(context).size.width > 980 ? 360 : null,
+                  action: SnackBarAction(label: 'Open PDF', onPressed: () => _printQuote(quote)),
+                ));
+              },
+              child: const Text('Save quote'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _printQuote(Quote quote) => PdfGenerator.printQuote(quote, _storeName, _storeAddress, _storePhone, _storeEmail, _globalVatRate);
+
+  Future<void> _loadQuote(Quote quote) async {
+    if (_cart.isNotEmpty) {
+      final replace = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Replace current order?'),
+          content: const Text('The items in the current order will be removed.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Keep order')),
+            ElevatedButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Replace order')),
+          ],
+        ),
+      );
+      if (replace != true) return;
+    }
+    _updateState(() {
+      _cart
+        ..clear()
+        ..addAll(quote.items.map((item) => CartItem(product: Product.fromJson(item.product.toJson()), quantity: item.quantity)));
+      _discountAmount = quote.discount;
+      _applyVat = quote.includesVat;
+      _loadedQuote = quote;
+      _currentMenuIndex = 1;
+    });
+  }
+
+  Future<void> _deleteQuote(Quote quote) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete quote'),
+        content: Text('Delete quote ${quote.id}? This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Delete quote')),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      setState(() => _quotes.remove(quote));
+      _saveQuotesToDatabase();
+    }
+  }
+
+  Widget _buildQuotesView(bool isDesktop) {
+    final pad = isDesktop ? 24.0 : 16.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _pageHeader('Quotes', isDesktop, subtitle: 'Priced orders waiting for a customer to go ahead.'),
+        Expanded(
+          child: _quotes.isEmpty
+              ? _emptyState(Icons.request_quote_outlined, 'No quotes yet. Add items to an order and choose Save quote.', actionLabel: 'Go to Point of Sale', onAction: () => setState(() => _currentMenuIndex = 1))
+              : ListView.builder(
+                  padding: EdgeInsets.symmetric(horizontal: pad, vertical: 4),
+                  itemCount: _quotes.length,
+                  itemBuilder: (context, index) => _quoteRow(_quotes[index]),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _quoteRow(Quote quote) {
+    final converted = quote.status == 'Converted';
+    final expired = !converted && quote.isExpired;
+    final statusText = converted ? 'Converted to sale' : (expired ? 'Expired' : 'Open');
+    final statusColor = converted ? AppColors.ok : (expired ? AppColors.red : AppColors.navy);
+    final validUntil = quote.validUntil;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(14),
+      decoration: _panelDecoration,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(quote.customerName ?? quote.businessName ?? 'Walk-in customer', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                    const SizedBox(height: 3),
+                    Text('${quote.id}, ${quote.items.length} line${quote.items.length == 1 ? '' : 's'}', style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+                    if (validUntil != null) Text('Valid until ${validUntil.day}/${validUntil.month}/${validUntil.year}', style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(money(quote.total), style: AppText.display(24)),
+                  const SizedBox(height: 3),
+                  Text(statusText, style: TextStyle(color: statusColor, fontWeight: FontWeight.w600, fontSize: 13)),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (!converted && !expired) ElevatedButton(onPressed: () => _loadQuote(quote), child: const Text('Sell this quote')),
+              OutlinedButton(onPressed: () => _printQuote(quote), child: const Text('Open PDF')),
+              TextButton(onPressed: () => _deleteQuote(quote), child: const Text('Delete', style: TextStyle(color: AppColors.red))),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   void _deleteCustomer(Customer c) {
     setState(() {
       _customers.remove(c);
